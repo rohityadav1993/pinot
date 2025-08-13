@@ -567,14 +567,35 @@ public abstract class ClusterTest extends ControllerTest {
    * This is used for testing timeseries queries.
    */
   public JsonNode getTimeseriesQuery(String query, long startTime, long endTime, Map<String, String> headers) {
+    return getTimeseriesQuery(getBrokerBaseApiUrl(), query, startTime, endTime, headers);
+  }
+
+  /**
+   * Queries the broker's timeseries query endpoint (/timeseries/api/v1/query_range).
+   * This is used for testing timeseries queries.
+   */
+  public JsonNode getTimeseriesQuery(String baseUrl, String query, long startTime, long endTime,
+      Map<String, String> headers) {
     try {
       Map<String, String> queryParams = Map.of("language", "m3ql", "query", query, "start",
         String.valueOf(startTime), "end", String.valueOf(endTime));
-      String url = buildQueryUrl(getTimeSeriesQueryApiUrl(getBrokerBaseApiUrl()), queryParams);
+      String url = buildQueryUrl(getTimeSeriesQueryApiUrl(baseUrl), queryParams);
       JsonNode responseJsonNode = JsonUtils.stringToJsonNode(sendGetRequest(url, headers));
       return sanitizeResponse(responseJsonNode);
     } catch (Exception e) {
       throw new RuntimeException("Failed to get timeseries query: " + query, e);
+    }
+  }
+
+  public JsonNode postTimeseriesQuery(String baseUrl, String query, long startTime, long endTime,
+      Map<String, String> headers) {
+    try {
+      Map<String, String> payload = Map.of("language", "m3ql", "query", query, "start",
+          String.valueOf(startTime), "end", String.valueOf(endTime));
+      return JsonUtils.stringToJsonNode(
+          sendPostRequest(baseUrl + "/query/timeseries", JsonUtils.objectToString(payload), headers));
+    } catch (Exception e) {
+      throw new RuntimeException("Failed to post timeseries query: " + query, e);
     }
   }
 
