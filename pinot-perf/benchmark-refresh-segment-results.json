@@ -1,0 +1,4252 @@
+[
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "30",
+            "_numRows" : "100000",
+            "_schemaEvolutionType" : "NONE"
+        },
+        "primaryMetric" : {
+            "score" : 848.3110064444443,
+            "scoreError" : 38.68938160988449,
+            "scoreConfidence" : [
+                809.6216248345597,
+                887.0003880543288
+            ],
+            "scorePercentiles" : {
+                "0.0" : 836.8028263333333,
+                "50.0" : 844.6379257222222,
+                "90.0" : 860.4902649444444,
+                "95.0" : 860.4902649444444,
+                "99.0" : 860.4902649444444,
+                "99.9" : 860.4902649444444,
+                "99.99" : 860.4902649444444,
+                "99.999" : 860.4902649444444,
+                "99.9999" : 860.4902649444444,
+                "100.0" : 860.4902649444444
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    844.6379257222222,
+                    842.5649491111111,
+                    860.4902649444444,
+                    857.0590661111111,
+                    836.8028263333333
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "30",
+            "_numRows" : "100000",
+            "_schemaEvolutionType" : "ADD_COLUMNS"
+        },
+        "primaryMetric" : {
+            "score" : 939.5794983345589,
+            "scoreError" : 21.87265627409955,
+            "scoreConfidence" : [
+                917.7068420604594,
+                961.4521546086585
+            ],
+            "scorePercentiles" : {
+                "0.0" : 930.1155102352941,
+                "50.0" : 941.740484625,
+                "90.0" : 944.4418620625,
+                "95.0" : 944.4418620625,
+                "99.0" : 944.4418620625,
+                "99.9" : 944.4418620625,
+                "99.99" : 944.4418620625,
+                "99.999" : 944.4418620625,
+                "99.9999" : 944.4418620625,
+                "100.0" : 944.4418620625
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    944.4418620625,
+                    942.8250970625,
+                    938.7745376875,
+                    941.740484625,
+                    930.1155102352941
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "30",
+            "_numRows" : "100000",
+            "_schemaEvolutionType" : "CHANGE_DATATYPES"
+        },
+        "primaryMetric" : {
+            "score" : 941.0934579375,
+            "scoreError" : 6.188998417528772,
+            "scoreConfidence" : [
+                934.9044595199713,
+                947.2824563550288
+            ],
+            "scorePercentiles" : {
+                "0.0" : 938.462689625,
+                "50.0" : 941.5988776875,
+                "90.0" : 942.73218575,
+                "95.0" : 942.73218575,
+                "99.0" : 942.73218575,
+                "99.9" : 942.73218575,
+                "99.99" : 942.73218575,
+                "99.999" : 942.73218575,
+                "99.9999" : 942.73218575,
+                "100.0" : 942.73218575
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    942.73218575,
+                    938.462689625,
+                    941.5988776875,
+                    940.9166726875,
+                    941.7568639375
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "30",
+            "_numRows" : "500000",
+            "_schemaEvolutionType" : "NONE"
+        },
+        "primaryMetric" : {
+            "score" : 3661.9410890400004,
+            "scoreError" : 45.896939514315676,
+            "scoreConfidence" : [
+                3616.0441495256846,
+                3707.838028554316
+            ],
+            "scorePercentiles" : {
+                "0.0" : 3647.1300656,
+                "50.0" : 3664.8481136,
+                "90.0" : 3673.7984532,
+                "95.0" : 3673.7984532,
+                "99.0" : 3673.7984532,
+                "99.9" : 3673.7984532,
+                "99.99" : 3673.7984532,
+                "99.999" : 3673.7984532,
+                "99.9999" : 3673.7984532,
+                "100.0" : 3673.7984532
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    3664.8481136,
+                    3651.9678454,
+                    3647.1300656,
+                    3671.9609674,
+                    3673.7984532
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "30",
+            "_numRows" : "500000",
+            "_schemaEvolutionType" : "ADD_COLUMNS"
+        },
+        "primaryMetric" : {
+            "score" : 4334.8731636,
+            "scoreError" : 1729.0847598791897,
+            "scoreConfidence" : [
+                2605.7884037208105,
+                6063.95792347919
+            ],
+            "scorePercentiles" : {
+                "0.0" : 4001.075303,
+                "50.0" : 4116.290197,
+                "90.0" : 5070.586427,
+                "95.0" : 5070.586427,
+                "99.0" : 5070.586427,
+                "99.9" : 5070.586427,
+                "99.99" : 5070.586427,
+                "99.999" : 5070.586427,
+                "99.9999" : 5070.586427,
+                "100.0" : 5070.586427
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    5070.586427,
+                    4454.46619075,
+                    4031.94770025,
+                    4116.290197,
+                    4001.075303
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "30",
+            "_numRows" : "500000",
+            "_schemaEvolutionType" : "CHANGE_DATATYPES"
+        },
+        "primaryMetric" : {
+            "score" : 3883.030777,
+            "scoreError" : 274.2368174423664,
+            "scoreConfidence" : [
+                3608.7939595576336,
+                4157.267594442366
+            ],
+            "scorePercentiles" : {
+                "0.0" : 3813.16002525,
+                "50.0" : 3871.95343725,
+                "90.0" : 3996.63859575,
+                "95.0" : 3996.63859575,
+                "99.0" : 3996.63859575,
+                "99.9" : 3996.63859575,
+                "99.99" : 3996.63859575,
+                "99.999" : 3996.63859575,
+                "99.9999" : 3996.63859575,
+                "100.0" : 3996.63859575
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    3871.95343725,
+                    3813.16002525,
+                    3836.340045,
+                    3897.06178175,
+                    3996.63859575
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "30",
+            "_numRows" : "1000000",
+            "_schemaEvolutionType" : "NONE"
+        },
+        "primaryMetric" : {
+            "score" : 7237.323245866666,
+            "scoreError" : 256.4465374766201,
+            "scoreConfidence" : [
+                6980.876708390046,
+                7493.769783343287
+            ],
+            "scorePercentiles" : {
+                "0.0" : 7132.8118306666665,
+                "50.0" : 7237.73659,
+                "90.0" : 7307.617726666666,
+                "95.0" : 7307.617726666666,
+                "99.0" : 7307.617726666666,
+                "99.9" : 7307.617726666666,
+                "99.99" : 7307.617726666666,
+                "99.999" : 7307.617726666666,
+                "99.9999" : 7307.617726666666,
+                "100.0" : 7307.617726666666
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    7307.617726666666,
+                    7228.672159666667,
+                    7237.73659,
+                    7132.8118306666665,
+                    7279.777922333334
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "30",
+            "_numRows" : "1000000",
+            "_schemaEvolutionType" : "ADD_COLUMNS"
+        },
+        "primaryMetric" : {
+            "score" : 7808.127548499999,
+            "scoreError" : 485.8906773399892,
+            "scoreConfidence" : [
+                7322.236871160009,
+                8294.018225839987
+            ],
+            "scorePercentiles" : {
+                "0.0" : 7704.9246095,
+                "50.0" : 7754.865279,
+                "90.0" : 8017.3681015,
+                "95.0" : 8017.3681015,
+                "99.0" : 8017.3681015,
+                "99.9" : 8017.3681015,
+                "99.99" : 8017.3681015,
+                "99.999" : 8017.3681015,
+                "99.9999" : 8017.3681015,
+                "100.0" : 8017.3681015
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    7704.9246095,
+                    8017.3681015,
+                    7831.8793435,
+                    7731.600409,
+                    7754.865279
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "30",
+            "_numRows" : "1000000",
+            "_schemaEvolutionType" : "CHANGE_DATATYPES"
+        },
+        "primaryMetric" : {
+            "score" : 7927.6008187,
+            "scoreError" : 639.5326780398607,
+            "scoreConfidence" : [
+                7288.068140660139,
+                8567.13349673986
+            ],
+            "scorePercentiles" : {
+                "0.0" : 7673.708155,
+                "50.0" : 7948.891597,
+                "90.0" : 8109.5821645,
+                "95.0" : 8109.5821645,
+                "99.0" : 8109.5821645,
+                "99.9" : 8109.5821645,
+                "99.99" : 8109.5821645,
+                "99.999" : 8109.5821645,
+                "99.9999" : 8109.5821645,
+                "100.0" : 8109.5821645
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    7673.708155,
+                    7948.891597,
+                    7878.671028,
+                    8109.5821645,
+                    8027.151149
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "50",
+            "_numRows" : "100000",
+            "_schemaEvolutionType" : "NONE"
+        },
+        "primaryMetric" : {
+            "score" : 1424.4924574545453,
+            "scoreError" : 43.825880023161574,
+            "scoreConfidence" : [
+                1380.6665774313838,
+                1468.3183374777068
+            ],
+            "scorePercentiles" : {
+                "0.0" : 1411.846843090909,
+                "50.0" : 1422.988292,
+                "90.0" : 1441.2189171818181,
+                "95.0" : 1441.2189171818181,
+                "99.0" : 1441.2189171818181,
+                "99.9" : 1441.2189171818181,
+                "99.99" : 1441.2189171818181,
+                "99.999" : 1441.2189171818181,
+                "99.9999" : 1441.2189171818181,
+                "100.0" : 1441.2189171818181
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    1441.2189171818181,
+                    1429.240702,
+                    1417.167533,
+                    1422.988292,
+                    1411.846843090909
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "50",
+            "_numRows" : "100000",
+            "_schemaEvolutionType" : "ADD_COLUMNS"
+        },
+        "primaryMetric" : {
+            "score" : 1523.52783532,
+            "scoreError" : 81.36783377132753,
+            "scoreConfidence" : [
+                1442.1600015486724,
+                1604.8956690913274
+            ],
+            "scorePercentiles" : {
+                "0.0" : 1491.906064,
+                "50.0" : 1528.9265877,
+                "90.0" : 1547.1736555,
+                "95.0" : 1547.1736555,
+                "99.0" : 1547.1736555,
+                "99.9" : 1547.1736555,
+                "99.99" : 1547.1736555,
+                "99.999" : 1547.1736555,
+                "99.9999" : 1547.1736555,
+                "100.0" : 1547.1736555
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    1528.9265877,
+                    1491.906064,
+                    1534.6790536,
+                    1547.1736555,
+                    1514.9538158
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "50",
+            "_numRows" : "100000",
+            "_schemaEvolutionType" : "CHANGE_DATATYPES"
+        },
+        "primaryMetric" : {
+            "score" : 1539.4041589199999,
+            "scoreError" : 11.966098156924042,
+            "scoreConfidence" : [
+                1527.4380607630758,
+                1551.370257076924
+            ],
+            "scorePercentiles" : {
+                "0.0" : 1534.9789396,
+                "50.0" : 1539.6548975,
+                "90.0" : 1543.3919334,
+                "95.0" : 1543.3919334,
+                "99.0" : 1543.3919334,
+                "99.9" : 1543.3919334,
+                "99.99" : 1543.3919334,
+                "99.999" : 1543.3919334,
+                "99.9999" : 1543.3919334,
+                "100.0" : 1543.3919334
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    1534.9789396,
+                    1543.3919334,
+                    1538.2600856,
+                    1540.7349385,
+                    1539.6548975
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "50",
+            "_numRows" : "500000",
+            "_schemaEvolutionType" : "NONE"
+        },
+        "primaryMetric" : {
+            "score" : 6223.604962933333,
+            "scoreError" : 382.2869366507533,
+            "scoreConfidence" : [
+                5841.31802628258,
+                6605.891899584086
+            ],
+            "scorePercentiles" : {
+                "0.0" : 6078.109795666666,
+                "50.0" : 6239.722956,
+                "90.0" : 6316.575691666667,
+                "95.0" : 6316.575691666667,
+                "99.0" : 6316.575691666667,
+                "99.9" : 6316.575691666667,
+                "99.99" : 6316.575691666667,
+                "99.999" : 6316.575691666667,
+                "99.9999" : 6316.575691666667,
+                "100.0" : 6316.575691666667
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    6078.109795666666,
+                    6175.891043,
+                    6239.722956,
+                    6307.725328333333,
+                    6316.575691666667
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "50",
+            "_numRows" : "500000",
+            "_schemaEvolutionType" : "ADD_COLUMNS"
+        },
+        "primaryMetric" : {
+            "score" : 6713.8861304,
+            "scoreError" : 745.0227188066768,
+            "scoreConfidence" : [
+                5968.863411593324,
+                7458.908849206677
+            ],
+            "scorePercentiles" : {
+                "0.0" : 6505.061162666667,
+                "50.0" : 6694.1650973333335,
+                "90.0" : 7020.656583666667,
+                "95.0" : 7020.656583666667,
+                "99.0" : 7020.656583666667,
+                "99.9" : 7020.656583666667,
+                "99.99" : 7020.656583666667,
+                "99.999" : 7020.656583666667,
+                "99.9999" : 7020.656583666667,
+                "100.0" : 7020.656583666667
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    7020.656583666667,
+                    6694.1650973333335,
+                    6609.299998333333,
+                    6740.24781,
+                    6505.061162666667
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "50",
+            "_numRows" : "500000",
+            "_schemaEvolutionType" : "CHANGE_DATATYPES"
+        },
+        "primaryMetric" : {
+            "score" : 6584.371814533333,
+            "scoreError" : 209.61567237584114,
+            "scoreConfidence" : [
+                6374.756142157492,
+                6793.987486909175
+            ],
+            "scorePercentiles" : {
+                "0.0" : 6499.630072666667,
+                "50.0" : 6613.375805,
+                "90.0" : 6628.447571333333,
+                "95.0" : 6628.447571333333,
+                "99.0" : 6628.447571333333,
+                "99.9" : 6628.447571333333,
+                "99.99" : 6628.447571333333,
+                "99.999" : 6628.447571333333,
+                "99.9999" : 6628.447571333333,
+                "100.0" : 6628.447571333333
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    6613.375805,
+                    6628.447571333333,
+                    6620.371281333333,
+                    6560.034342333333,
+                    6499.630072666667
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "50",
+            "_numRows" : "1000000",
+            "_schemaEvolutionType" : "NONE"
+        },
+        "primaryMetric" : {
+            "score" : 13341.8046314,
+            "scoreError" : 4049.0386045460305,
+            "scoreConfidence" : [
+                9292.76602685397,
+                17390.84323594603
+            ],
+            "scorePercentiles" : {
+                "0.0" : 12552.6532275,
+                "50.0" : 12911.593918,
+                "90.0" : 15174.360217,
+                "95.0" : 15174.360217,
+                "99.0" : 15174.360217,
+                "99.9" : 15174.360217,
+                "99.99" : 15174.360217,
+                "99.999" : 15174.360217,
+                "99.9999" : 15174.360217,
+                "100.0" : 15174.360217
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    15174.360217,
+                    12849.8788495,
+                    13220.536945,
+                    12552.6532275,
+                    12911.593918
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "50",
+            "_numRows" : "1000000",
+            "_schemaEvolutionType" : "ADD_COLUMNS"
+        },
+        "primaryMetric" : {
+            "score" : 13237.2399702,
+            "scoreError" : 1232.05029636957,
+            "scoreConfidence" : [
+                12005.18967383043,
+                14469.290266569571
+            ],
+            "scorePercentiles" : {
+                "0.0" : 12849.005119,
+                "50.0" : 13305.8465085,
+                "90.0" : 13546.2193705,
+                "95.0" : 13546.2193705,
+                "99.0" : 13546.2193705,
+                "99.9" : 13546.2193705,
+                "99.99" : 13546.2193705,
+                "99.999" : 13546.2193705,
+                "99.9999" : 13546.2193705,
+                "100.0" : 13546.2193705
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    13524.112226,
+                    13546.2193705,
+                    12961.016627,
+                    13305.8465085,
+                    12849.005119
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "50",
+            "_numRows" : "1000000",
+            "_schemaEvolutionType" : "CHANGE_DATATYPES"
+        },
+        "primaryMetric" : {
+            "score" : 12741.3665977,
+            "scoreError" : 508.61779086124955,
+            "scoreConfidence" : [
+                12232.74880683875,
+                13249.98438856125
+            ],
+            "scorePercentiles" : {
+                "0.0" : 12580.4196315,
+                "50.0" : 12696.53542,
+                "90.0" : 12928.1964175,
+                "95.0" : 12928.1964175,
+                "99.0" : 12928.1964175,
+                "99.9" : 12928.1964175,
+                "99.99" : 12928.1964175,
+                "99.999" : 12928.1964175,
+                "99.9999" : 12928.1964175,
+                "100.0" : 12928.1964175
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    12692.5799955,
+                    12809.101524,
+                    12696.53542,
+                    12580.4196315,
+                    12928.1964175
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "75",
+            "_numRows" : "100000",
+            "_schemaEvolutionType" : "NONE"
+        },
+        "primaryMetric" : {
+            "score" : 2240.436586457143,
+            "scoreError" : 193.53665680804238,
+            "scoreConfidence" : [
+                2046.8999296491008,
+                2433.9732432651854
+            ],
+            "scorePercentiles" : {
+                "0.0" : 2178.7556337142855,
+                "50.0" : 2262.655158428571,
+                "90.0" : 2286.6294711428573,
+                "95.0" : 2286.6294711428573,
+                "99.0" : 2286.6294711428573,
+                "99.9" : 2286.6294711428573,
+                "99.99" : 2286.6294711428573,
+                "99.999" : 2286.6294711428573,
+                "99.9999" : 2286.6294711428573,
+                "100.0" : 2286.6294711428573
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    2286.6294711428573,
+                    2279.7912182857144,
+                    2178.7556337142855,
+                    2262.655158428571,
+                    2194.351450714286
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "75",
+            "_numRows" : "100000",
+            "_schemaEvolutionType" : "ADD_COLUMNS"
+        },
+        "primaryMetric" : {
+            "score" : 2345.0709534000002,
+            "scoreError" : 157.7975578003052,
+            "scoreConfidence" : [
+                2187.273395599695,
+                2502.8685112003054
+            ],
+            "scorePercentiles" : {
+                "0.0" : 2298.391716571429,
+                "50.0" : 2355.0636217142855,
+                "90.0" : 2391.8784461428572,
+                "95.0" : 2391.8784461428572,
+                "99.0" : 2391.8784461428572,
+                "99.9" : 2391.8784461428572,
+                "99.99" : 2391.8784461428572,
+                "99.999" : 2391.8784461428572,
+                "99.9999" : 2391.8784461428572,
+                "100.0" : 2391.8784461428572
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    2355.0636217142855,
+                    2373.1490131428573,
+                    2391.8784461428572,
+                    2298.391716571429,
+                    2306.8719694285714
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "75",
+            "_numRows" : "100000",
+            "_schemaEvolutionType" : "CHANGE_DATATYPES"
+        },
+        "primaryMetric" : {
+            "score" : 2372.5933123809527,
+            "scoreError" : 365.73004538364654,
+            "scoreConfidence" : [
+                2006.8632669973063,
+                2738.323357764599
+            ],
+            "scorePercentiles" : {
+                "0.0" : 2271.3555027142856,
+                "50.0" : 2352.0789317142858,
+                "90.0" : 2516.2234613333335,
+                "95.0" : 2516.2234613333335,
+                "99.0" : 2516.2234613333335,
+                "99.9" : 2516.2234613333335,
+                "99.99" : 2516.2234613333335,
+                "99.999" : 2516.2234613333335,
+                "99.9999" : 2516.2234613333335,
+                "100.0" : 2516.2234613333335
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    2313.9829922857143,
+                    2271.3555027142856,
+                    2409.3256738571426,
+                    2516.2234613333335,
+                    2352.0789317142858
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "75",
+            "_numRows" : "500000",
+            "_schemaEvolutionType" : "NONE"
+        },
+        "primaryMetric" : {
+            "score" : 9674.695410600001,
+            "scoreError" : 671.744932801583,
+            "scoreConfidence" : [
+                9002.950477798418,
+                10346.440343401584
+            ],
+            "scorePercentiles" : {
+                "0.0" : 9434.548787,
+                "50.0" : 9656.1465395,
+                "90.0" : 9887.5163975,
+                "95.0" : 9887.5163975,
+                "99.0" : 9887.5163975,
+                "99.9" : 9887.5163975,
+                "99.99" : 9887.5163975,
+                "99.999" : 9887.5163975,
+                "99.9999" : 9887.5163975,
+                "100.0" : 9887.5163975
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    9434.548787,
+                    9656.1465395,
+                    9790.8307785,
+                    9887.5163975,
+                    9604.4345505
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "75",
+            "_numRows" : "500000",
+            "_schemaEvolutionType" : "ADD_COLUMNS"
+        },
+        "primaryMetric" : {
+            "score" : 10152.7076808,
+            "scoreError" : 858.9903400664834,
+            "scoreConfidence" : [
+                9293.717340733518,
+                11011.698020866483
+            ],
+            "scorePercentiles" : {
+                "0.0" : 9969.233864,
+                "50.0" : 10034.575209,
+                "90.0" : 10482.347788,
+                "95.0" : 10482.347788,
+                "99.0" : 10482.347788,
+                "99.9" : 10482.347788,
+                "99.99" : 10482.347788,
+                "99.999" : 10482.347788,
+                "99.9999" : 10482.347788,
+                "100.0" : 10482.347788
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    10034.575209,
+                    9993.122858,
+                    9969.233864,
+                    10482.347788,
+                    10284.258685
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "75",
+            "_numRows" : "500000",
+            "_schemaEvolutionType" : "CHANGE_DATATYPES"
+        },
+        "primaryMetric" : {
+            "score" : 10278.6169539,
+            "scoreError" : 1375.6841978089399,
+            "scoreConfidence" : [
+                8902.93275609106,
+                11654.30115170894
+            ],
+            "scorePercentiles" : {
+                "0.0" : 9884.3540645,
+                "50.0" : 10155.7748465,
+                "90.0" : 10663.1805055,
+                "95.0" : 10663.1805055,
+                "99.0" : 10663.1805055,
+                "99.9" : 10663.1805055,
+                "99.99" : 10663.1805055,
+                "99.999" : 10663.1805055,
+                "99.9999" : 10663.1805055,
+                "100.0" : 10663.1805055
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    10155.7748465,
+                    10663.1805055,
+                    10647.6541005,
+                    10042.1212525,
+                    9884.3540645
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "75",
+            "_numRows" : "1000000",
+            "_schemaEvolutionType" : "NONE"
+        },
+        "primaryMetric" : {
+            "score" : 19064.545838,
+            "scoreError" : 709.4802493664822,
+            "scoreConfidence" : [
+                18355.065588633515,
+                19774.02608736648
+            ],
+            "scorePercentiles" : {
+                "0.0" : 18831.438314,
+                "50.0" : 19069.379507,
+                "90.0" : 19341.655724,
+                "95.0" : 19341.655724,
+                "99.0" : 19341.655724,
+                "99.9" : 19341.655724,
+                "99.99" : 19341.655724,
+                "99.999" : 19341.655724,
+                "99.9999" : 19341.655724,
+                "100.0" : 19341.655724
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    19081.643227,
+                    18831.438314,
+                    18998.612418,
+                    19341.655724,
+                    19069.379507
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "75",
+            "_numRows" : "1000000",
+            "_schemaEvolutionType" : "ADD_COLUMNS"
+        },
+        "primaryMetric" : {
+            "score" : 22663.090243399998,
+            "scoreError" : 17839.221015158553,
+            "scoreConfidence" : [
+                4823.869228241445,
+                40502.31125855855
+            ],
+            "scorePercentiles" : {
+                "0.0" : 19709.46195,
+                "50.0" : 21122.739004,
+                "90.0" : 30879.213399,
+                "95.0" : 30879.213399,
+                "99.0" : 30879.213399,
+                "99.9" : 30879.213399,
+                "99.99" : 30879.213399,
+                "99.999" : 30879.213399,
+                "99.9999" : 30879.213399,
+                "100.0" : 30879.213399
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    21203.564873,
+                    30879.213399,
+                    21122.739004,
+                    19709.46195,
+                    20400.471991
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "75",
+            "_numRows" : "1000000",
+            "_schemaEvolutionType" : "CHANGE_DATATYPES"
+        },
+        "primaryMetric" : {
+            "score" : 20135.126388800003,
+            "scoreError" : 2279.3413459794497,
+            "scoreConfidence" : [
+                17855.785042820553,
+                22414.467734779453
+            ],
+            "scorePercentiles" : {
+                "0.0" : 19277.073055,
+                "50.0" : 20212.219934,
+                "90.0" : 20924.502176,
+                "95.0" : 20924.502176,
+                "99.0" : 20924.502176,
+                "99.9" : 20924.502176,
+                "99.99" : 20924.502176,
+                "99.999" : 20924.502176,
+                "99.9999" : 20924.502176,
+                "100.0" : 20924.502176
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    19277.073055,
+                    19996.358886,
+                    20212.219934,
+                    20924.502176,
+                    20265.477893
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "100",
+            "_numRows" : "100000",
+            "_schemaEvolutionType" : "NONE"
+        },
+        "primaryMetric" : {
+            "score" : 3138.5934844333337,
+            "scoreError" : 430.242189223293,
+            "scoreConfidence" : [
+                2708.351295210041,
+                3568.8356736566266
+            ],
+            "scorePercentiles" : {
+                "0.0" : 3029.9416446,
+                "50.0" : 3090.8400291666667,
+                "90.0" : 3306.6376254,
+                "95.0" : 3306.6376254,
+                "99.0" : 3306.6376254,
+                "99.9" : 3306.6376254,
+                "99.99" : 3306.6376254,
+                "99.999" : 3306.6376254,
+                "99.9999" : 3306.6376254,
+                "100.0" : 3306.6376254
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    3194.1925188,
+                    3071.3556042,
+                    3029.9416446,
+                    3306.6376254,
+                    3090.8400291666667
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "100",
+            "_numRows" : "100000",
+            "_schemaEvolutionType" : "ADD_COLUMNS"
+        },
+        "primaryMetric" : {
+            "score" : 3160.00638944,
+            "scoreError" : 397.58962012383006,
+            "scoreConfidence" : [
+                2762.41676931617,
+                3557.59600956383
+            ],
+            "scorePercentiles" : {
+                "0.0" : 3054.9546786,
+                "50.0" : 3183.306741,
+                "90.0" : 3308.7068118,
+                "95.0" : 3308.7068118,
+                "99.0" : 3308.7068118,
+                "99.9" : 3308.7068118,
+                "99.99" : 3308.7068118,
+                "99.999" : 3308.7068118,
+                "99.9999" : 3308.7068118,
+                "100.0" : 3308.7068118
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    3184.4665572,
+                    3183.306741,
+                    3054.9546786,
+                    3068.5971586,
+                    3308.7068118
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "100",
+            "_numRows" : "100000",
+            "_schemaEvolutionType" : "CHANGE_DATATYPES"
+        },
+        "primaryMetric" : {
+            "score" : 3177.92339276,
+            "scoreError" : 262.89380124952055,
+            "scoreConfidence" : [
+                2915.0295915104793,
+                3440.8171940095203
+            ],
+            "scorePercentiles" : {
+                "0.0" : 3114.874414,
+                "50.0" : 3158.0826474,
+                "90.0" : 3294.7298218,
+                "95.0" : 3294.7298218,
+                "99.0" : 3294.7298218,
+                "99.9" : 3294.7298218,
+                "99.99" : 3294.7298218,
+                "99.999" : 3294.7298218,
+                "99.9999" : 3294.7298218,
+                "100.0" : 3294.7298218
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    3114.874414,
+                    3166.2987092,
+                    3158.0826474,
+                    3155.6313714,
+                    3294.7298218
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "100",
+            "_numRows" : "500000",
+            "_schemaEvolutionType" : "NONE"
+        },
+        "primaryMetric" : {
+            "score" : 13473.6131888,
+            "scoreError" : 1546.1062204780815,
+            "scoreConfidence" : [
+                11927.506968321919,
+                15019.719409278081
+            ],
+            "scorePercentiles" : {
+                "0.0" : 12914.2824205,
+                "50.0" : 13542.913663,
+                "90.0" : 13892.090669,
+                "95.0" : 13892.090669,
+                "99.0" : 13892.090669,
+                "99.9" : 13892.090669,
+                "99.99" : 13892.090669,
+                "99.999" : 13892.090669,
+                "99.9999" : 13892.090669,
+                "100.0" : 13892.090669
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    13782.824105,
+                    13542.913663,
+                    13235.9550865,
+                    12914.2824205,
+                    13892.090669
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "100",
+            "_numRows" : "500000",
+            "_schemaEvolutionType" : "ADD_COLUMNS"
+        },
+        "primaryMetric" : {
+            "score" : 13400.0024888,
+            "scoreError" : 1010.9684194748535,
+            "scoreConfidence" : [
+                12389.034069325147,
+                14410.970908274854
+            ],
+            "scorePercentiles" : {
+                "0.0" : 13048.180094,
+                "50.0" : 13344.7599955,
+                "90.0" : 13701.858706,
+                "95.0" : 13701.858706,
+                "99.0" : 13701.858706,
+                "99.9" : 13701.858706,
+                "99.99" : 13701.858706,
+                "99.999" : 13701.858706,
+                "99.9999" : 13701.858706,
+                "100.0" : 13701.858706
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    13048.180094,
+                    13290.993436,
+                    13701.858706,
+                    13614.2202125,
+                    13344.7599955
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "100",
+            "_numRows" : "500000",
+            "_schemaEvolutionType" : "CHANGE_DATATYPES"
+        },
+        "primaryMetric" : {
+            "score" : 12926.800741200002,
+            "scoreError" : 656.0384837032605,
+            "scoreConfidence" : [
+                12270.762257496743,
+                13582.839224903262
+            ],
+            "scorePercentiles" : {
+                "0.0" : 12699.614733,
+                "50.0" : 12876.5687605,
+                "90.0" : 13112.1969785,
+                "95.0" : 13112.1969785,
+                "99.0" : 13112.1969785,
+                "99.9" : 13112.1969785,
+                "99.99" : 13112.1969785,
+                "99.999" : 13112.1969785,
+                "99.9999" : 13112.1969785,
+                "100.0" : 13112.1969785
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    12864.731181,
+                    12876.5687605,
+                    13112.1969785,
+                    13080.892053,
+                    12699.614733
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "100",
+            "_numRows" : "1000000",
+            "_schemaEvolutionType" : "NONE"
+        },
+        "primaryMetric" : {
+            "score" : 25802.6142158,
+            "scoreError" : 2441.082113759189,
+            "scoreConfidence" : [
+                23361.532102040812,
+                28243.69632955919
+            ],
+            "scorePercentiles" : {
+                "0.0" : 24963.976446,
+                "50.0" : 25652.479404,
+                "90.0" : 26473.339401,
+                "95.0" : 26473.339401,
+                "99.0" : 26473.339401,
+                "99.9" : 26473.339401,
+                "99.99" : 26473.339401,
+                "99.999" : 26473.339401,
+                "99.9999" : 26473.339401,
+                "100.0" : 26473.339401
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    26473.339401,
+                    26398.228702,
+                    25525.047126,
+                    25652.479404,
+                    24963.976446
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "100",
+            "_numRows" : "1000000",
+            "_schemaEvolutionType" : "ADD_COLUMNS"
+        },
+        "primaryMetric" : {
+            "score" : 25533.6535126,
+            "scoreError" : 679.7488488715911,
+            "scoreConfidence" : [
+                24853.904663728412,
+                26213.40236147159
+            ],
+            "scorePercentiles" : {
+                "0.0" : 25237.871361,
+                "50.0" : 25617.540836,
+                "90.0" : 25670.541684,
+                "95.0" : 25670.541684,
+                "99.0" : 25670.541684,
+                "99.9" : 25670.541684,
+                "99.99" : 25670.541684,
+                "99.999" : 25670.541684,
+                "99.9999" : 25670.541684,
+                "100.0" : 25670.541684
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    25505.682128,
+                    25617.540836,
+                    25636.631554,
+                    25670.541684,
+                    25237.871361
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkColumnBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "100",
+            "_numRows" : "1000000",
+            "_schemaEvolutionType" : "CHANGE_DATATYPES"
+        },
+        "primaryMetric" : {
+            "score" : 25513.5659606,
+            "scoreError" : 520.0549473601712,
+            "scoreConfidence" : [
+                24993.51101323983,
+                26033.620907960172
+            ],
+            "scorePercentiles" : {
+                "0.0" : 25348.625029,
+                "50.0" : 25548.758986,
+                "90.0" : 25684.029564,
+                "95.0" : 25684.029564,
+                "99.0" : 25684.029564,
+                "99.9" : 25684.029564,
+                "99.99" : 25684.029564,
+                "99.999" : 25684.029564,
+                "99.9999" : 25684.029564,
+                "100.0" : 25684.029564
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    25684.029564,
+                    25348.625029,
+                    25548.758986,
+                    25578.736986,
+                    25407.679238
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "30",
+            "_numRows" : "100000",
+            "_schemaEvolutionType" : "NONE"
+        },
+        "primaryMetric" : {
+            "score" : 1860.7145444722223,
+            "scoreError" : 104.4507538596873,
+            "scoreConfidence" : [
+                1756.263790612535,
+                1965.1652983319095
+            ],
+            "scorePercentiles" : {
+                "0.0" : 1836.6229213333334,
+                "50.0" : 1845.850189,
+                "90.0" : 1890.493336875,
+                "95.0" : 1890.493336875,
+                "99.0" : 1890.493336875,
+                "99.9" : 1890.493336875,
+                "99.99" : 1890.493336875,
+                "99.999" : 1890.493336875,
+                "99.9999" : 1890.493336875,
+                "100.0" : 1890.493336875
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    1845.850189,
+                    1890.493336875,
+                    1840.6765757777778,
+                    1836.6229213333334,
+                    1889.929699375
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "30",
+            "_numRows" : "100000",
+            "_schemaEvolutionType" : "ADD_COLUMNS"
+        },
+        "primaryMetric" : {
+            "score" : 2040.5498926750001,
+            "scoreError" : 244.79351367237564,
+            "scoreConfidence" : [
+                1795.7563790026245,
+                2285.343406347376
+            ],
+            "scorePercentiles" : {
+                "0.0" : 1955.28954825,
+                "50.0" : 2047.384146875,
+                "90.0" : 2131.885598,
+                "95.0" : 2131.885598,
+                "99.0" : 2131.885598,
+                "99.9" : 2131.885598,
+                "99.99" : 2131.885598,
+                "99.999" : 2131.885598,
+                "99.9999" : 2131.885598,
+                "100.0" : 2131.885598
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    2048.6565605,
+                    2131.885598,
+                    2019.53360975,
+                    2047.384146875,
+                    1955.28954825
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "30",
+            "_numRows" : "100000",
+            "_schemaEvolutionType" : "CHANGE_DATATYPES"
+        },
+        "primaryMetric" : {
+            "score" : 1974.1313698499998,
+            "scoreError" : 162.42803731845845,
+            "scoreConfidence" : [
+                1811.7033325315415,
+                2136.559407168458
+            ],
+            "scorePercentiles" : {
+                "0.0" : 1919.362953875,
+                "50.0" : 1971.49896075,
+                "90.0" : 2029.97343575,
+                "95.0" : 2029.97343575,
+                "99.0" : 2029.97343575,
+                "99.9" : 2029.97343575,
+                "99.99" : 2029.97343575,
+                "99.999" : 2029.97343575,
+                "99.9999" : 2029.97343575,
+                "100.0" : 2029.97343575
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    1952.648228375,
+                    2029.97343575,
+                    1919.362953875,
+                    1971.49896075,
+                    1997.1732705
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "30",
+            "_numRows" : "500000",
+            "_schemaEvolutionType" : "NONE"
+        },
+        "primaryMetric" : {
+            "score" : 10630.7614366,
+            "scoreError" : 2863.038347376782,
+            "scoreConfidence" : [
+                7767.723089223218,
+                13493.799783976781
+            ],
+            "scorePercentiles" : {
+                "0.0" : 10056.336861,
+                "50.0" : 10319.241983,
+                "90.0" : 11909.8036385,
+                "95.0" : 11909.8036385,
+                "99.0" : 11909.8036385,
+                "99.9" : 11909.8036385,
+                "99.99" : 11909.8036385,
+                "99.999" : 11909.8036385,
+                "99.9999" : 11909.8036385,
+                "100.0" : 11909.8036385
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    10622.732451,
+                    10245.6922495,
+                    10319.241983,
+                    11909.8036385,
+                    10056.336861
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "30",
+            "_numRows" : "500000",
+            "_schemaEvolutionType" : "ADD_COLUMNS"
+        },
+        "primaryMetric" : {
+            "score" : 10197.3038406,
+            "scoreError" : 711.1825683495241,
+            "scoreConfidence" : [
+                9486.121272250475,
+                10908.486408949524
+            ],
+            "scorePercentiles" : {
+                "0.0" : 9948.937773,
+                "50.0" : 10166.1273145,
+                "90.0" : 10394.6352825,
+                "95.0" : 10394.6352825,
+                "99.0" : 10394.6352825,
+                "99.9" : 10394.6352825,
+                "99.99" : 10394.6352825,
+                "99.999" : 10394.6352825,
+                "99.9999" : 10394.6352825,
+                "100.0" : 10394.6352825
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    10394.6352825,
+                    9948.937773,
+                    10166.1273145,
+                    10112.9749505,
+                    10363.8438825
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "30",
+            "_numRows" : "500000",
+            "_schemaEvolutionType" : "CHANGE_DATATYPES"
+        },
+        "primaryMetric" : {
+            "score" : 11053.289673099998,
+            "scoreError" : 1247.8628135849715,
+            "scoreConfidence" : [
+                9805.426859515026,
+                12301.15248668497
+            ],
+            "scorePercentiles" : {
+                "0.0" : 10743.453748,
+                "50.0" : 10968.3170405,
+                "90.0" : 11560.1408325,
+                "95.0" : 11560.1408325,
+                "99.0" : 11560.1408325,
+                "99.9" : 11560.1408325,
+                "99.99" : 11560.1408325,
+                "99.999" : 11560.1408325,
+                "99.9999" : 11560.1408325,
+                "100.0" : 11560.1408325
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    11560.1408325,
+                    11161.0999875,
+                    10968.3170405,
+                    10743.453748,
+                    10833.436757
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "30",
+            "_numRows" : "1000000",
+            "_schemaEvolutionType" : "NONE"
+        },
+        "primaryMetric" : {
+            "score" : 18508.4345224,
+            "scoreError" : 2216.887615263186,
+            "scoreConfidence" : [
+                16291.546907136813,
+                20725.322137663185
+            ],
+            "scorePercentiles" : {
+                "0.0" : 18059.908138,
+                "50.0" : 18167.174606,
+                "90.0" : 19351.845422,
+                "95.0" : 19351.845422,
+                "99.0" : 19351.845422,
+                "99.9" : 19351.845422,
+                "99.99" : 19351.845422,
+                "99.999" : 19351.845422,
+                "99.9999" : 19351.845422,
+                "100.0" : 19351.845422
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    19351.845422,
+                    18059.908138,
+                    18097.308567,
+                    18167.174606,
+                    18865.935879
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "30",
+            "_numRows" : "1000000",
+            "_schemaEvolutionType" : "ADD_COLUMNS"
+        },
+        "primaryMetric" : {
+            "score" : 20512.910295799997,
+            "scoreError" : 1724.5177642558233,
+            "scoreConfidence" : [
+                18788.392531544174,
+                22237.42806005582
+            ],
+            "scorePercentiles" : {
+                "0.0" : 20178.920692,
+                "50.0" : 20359.947949,
+                "90.0" : 21287.822169,
+                "95.0" : 21287.822169,
+                "99.0" : 21287.822169,
+                "99.9" : 21287.822169,
+                "99.99" : 21287.822169,
+                "99.999" : 21287.822169,
+                "99.9999" : 21287.822169,
+                "100.0" : 21287.822169
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    20178.920692,
+                    20256.259381,
+                    20481.601288,
+                    20359.947949,
+                    21287.822169
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "30",
+            "_numRows" : "1000000",
+            "_schemaEvolutionType" : "CHANGE_DATATYPES"
+        },
+        "primaryMetric" : {
+            "score" : 19437.167136,
+            "scoreError" : 1286.9412011091392,
+            "scoreConfidence" : [
+                18150.22593489086,
+                20724.10833710914
+            ],
+            "scorePercentiles" : {
+                "0.0" : 19015.746593,
+                "50.0" : 19393.73786,
+                "90.0" : 19921.941505,
+                "95.0" : 19921.941505,
+                "99.0" : 19921.941505,
+                "99.9" : 19921.941505,
+                "99.99" : 19921.941505,
+                "99.999" : 19921.941505,
+                "99.9999" : 19921.941505,
+                "100.0" : 19921.941505
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    19300.493803,
+                    19921.941505,
+                    19553.915919,
+                    19393.73786,
+                    19015.746593
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "50",
+            "_numRows" : "100000",
+            "_schemaEvolutionType" : "NONE"
+        },
+        "primaryMetric" : {
+            "score" : 3077.6175969200003,
+            "scoreError" : 189.46431112065355,
+            "scoreConfidence" : [
+                2888.1532857993466,
+                3267.081908040654
+            ],
+            "scorePercentiles" : {
+                "0.0" : 3012.7159346,
+                "50.0" : 3081.1221358,
+                "90.0" : 3141.949261,
+                "95.0" : 3141.949261,
+                "99.0" : 3141.949261,
+                "99.9" : 3141.949261,
+                "99.99" : 3141.949261,
+                "99.999" : 3141.949261,
+                "99.9999" : 3141.949261,
+                "100.0" : 3141.949261
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    3012.7159346,
+                    3050.49419,
+                    3141.949261,
+                    3081.1221358,
+                    3101.8064632
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "50",
+            "_numRows" : "100000",
+            "_schemaEvolutionType" : "ADD_COLUMNS"
+        },
+        "primaryMetric" : {
+            "score" : 3477.06788477,
+            "scoreError" : 970.4173406936441,
+            "scoreConfidence" : [
+                2506.650544076356,
+                4447.485225463644
+            ],
+            "scorePercentiles" : {
+                "0.0" : 3239.0914658,
+                "50.0" : 3448.958291,
+                "90.0" : 3880.21653425,
+                "95.0" : 3880.21653425,
+                "99.0" : 3880.21653425,
+                "99.9" : 3880.21653425,
+                "99.99" : 3880.21653425,
+                "99.999" : 3880.21653425,
+                "99.9999" : 3880.21653425,
+                "100.0" : 3880.21653425
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    3297.4060328,
+                    3239.0914658,
+                    3448.958291,
+                    3880.21653425,
+                    3519.6671
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "50",
+            "_numRows" : "100000",
+            "_schemaEvolutionType" : "CHANGE_DATATYPES"
+        },
+        "primaryMetric" : {
+            "score" : 3575.4227614399997,
+            "scoreError" : 553.4388747347539,
+            "scoreConfidence" : [
+                3021.983886705246,
+                4128.861636174754
+            ],
+            "scorePercentiles" : {
+                "0.0" : 3381.19142,
+                "50.0" : 3631.4199328,
+                "90.0" : 3716.8734776,
+                "95.0" : 3716.8734776,
+                "99.0" : 3716.8734776,
+                "99.9" : 3716.8734776,
+                "99.99" : 3716.8734776,
+                "99.999" : 3716.8734776,
+                "99.9999" : 3716.8734776,
+                "100.0" : 3716.8734776
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    3381.19142,
+                    3469.5215288,
+                    3678.107448,
+                    3716.8734776,
+                    3631.4199328
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "50",
+            "_numRows" : "500000",
+            "_schemaEvolutionType" : "NONE"
+        },
+        "primaryMetric" : {
+            "score" : 19254.006552,
+            "scoreError" : 2417.810150763203,
+            "scoreConfidence" : [
+                16836.196401236797,
+                21671.8167027632
+            ],
+            "scorePercentiles" : {
+                "0.0" : 18614.619028,
+                "50.0" : 18951.876524,
+                "90.0" : 20059.79175,
+                "95.0" : 20059.79175,
+                "99.0" : 20059.79175,
+                "99.9" : 20059.79175,
+                "99.99" : 20059.79175,
+                "99.999" : 20059.79175,
+                "99.9999" : 20059.79175,
+                "100.0" : 20059.79175
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    18951.876524,
+                    20059.79175,
+                    18864.477225,
+                    19779.268233,
+                    18614.619028
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "50",
+            "_numRows" : "500000",
+            "_schemaEvolutionType" : "ADD_COLUMNS"
+        },
+        "primaryMetric" : {
+            "score" : 17556.3309176,
+            "scoreError" : 4601.680004993156,
+            "scoreConfidence" : [
+                12954.650912606845,
+                22158.010922593156
+            ],
+            "scorePercentiles" : {
+                "0.0" : 16429.990398,
+                "50.0" : 16978.317818,
+                "90.0" : 19301.965069,
+                "95.0" : 19301.965069,
+                "99.0" : 19301.965069,
+                "99.9" : 19301.965069,
+                "99.99" : 19301.965069,
+                "99.999" : 19301.965069,
+                "99.9999" : 19301.965069,
+                "100.0" : 19301.965069
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    19301.965069,
+                    18264.273442,
+                    16978.317818,
+                    16429.990398,
+                    16807.107861
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "50",
+            "_numRows" : "500000",
+            "_schemaEvolutionType" : "CHANGE_DATATYPES"
+        },
+        "primaryMetric" : {
+            "score" : 16818.2816924,
+            "scoreError" : 3902.3903372220616,
+            "scoreConfidence" : [
+                12915.891355177939,
+                20720.672029622063
+            ],
+            "scorePercentiles" : {
+                "0.0" : 16103.497919,
+                "50.0" : 16382.076145,
+                "90.0" : 18601.067609,
+                "95.0" : 18601.067609,
+                "99.0" : 18601.067609,
+                "99.9" : 18601.067609,
+                "99.99" : 18601.067609,
+                "99.999" : 18601.067609,
+                "99.9999" : 18601.067609,
+                "100.0" : 18601.067609
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    16381.699576,
+                    16382.076145,
+                    16623.067213,
+                    16103.497919,
+                    18601.067609
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "50",
+            "_numRows" : "1000000",
+            "_schemaEvolutionType" : "NONE"
+        },
+        "primaryMetric" : {
+            "score" : 35261.824244999996,
+            "scoreError" : 10386.790125700563,
+            "scoreConfidence" : [
+                24875.03411929943,
+                45648.61437070056
+            ],
+            "scorePercentiles" : {
+                "0.0" : 33067.916817,
+                "50.0" : 33511.60211,
+                "90.0" : 38280.247026,
+                "95.0" : 38280.247026,
+                "99.0" : 38280.247026,
+                "99.9" : 38280.247026,
+                "99.99" : 38280.247026,
+                "99.999" : 38280.247026,
+                "99.9999" : 38280.247026,
+                "100.0" : 38280.247026
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    33511.60211,
+                    33067.916817,
+                    38280.247026,
+                    38142.152687,
+                    33307.202585
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "50",
+            "_numRows" : "1000000",
+            "_schemaEvolutionType" : "ADD_COLUMNS"
+        },
+        "primaryMetric" : {
+            "score" : 37540.8479526,
+            "scoreError" : 4262.213410238703,
+            "scoreConfidence" : [
+                33278.634542361295,
+                41803.06136283871
+            ],
+            "scorePercentiles" : {
+                "0.0" : 36203.36803,
+                "50.0" : 37932.63709,
+                "90.0" : 38742.03957,
+                "95.0" : 38742.03957,
+                "99.0" : 38742.03957,
+                "99.9" : 38742.03957,
+                "99.99" : 38742.03957,
+                "99.999" : 38742.03957,
+                "99.9999" : 38742.03957,
+                "100.0" : 38742.03957
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    38274.175215,
+                    38742.03957,
+                    37932.63709,
+                    36203.36803,
+                    36552.019858
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "50",
+            "_numRows" : "1000000",
+            "_schemaEvolutionType" : "CHANGE_DATATYPES"
+        },
+        "primaryMetric" : {
+            "score" : 33579.4328654,
+            "scoreError" : 4220.8971516231995,
+            "scoreConfidence" : [
+                29358.5357137768,
+                37800.330017023196
+            ],
+            "scorePercentiles" : {
+                "0.0" : 32929.0198,
+                "50.0" : 33177.903916,
+                "90.0" : 35518.731818,
+                "95.0" : 35518.731818,
+                "99.0" : 35518.731818,
+                "99.9" : 35518.731818,
+                "99.99" : 35518.731818,
+                "99.999" : 35518.731818,
+                "99.9999" : 35518.731818,
+                "100.0" : 35518.731818
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    32952.224439,
+                    32929.0198,
+                    33177.903916,
+                    33319.284354,
+                    35518.731818
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "75",
+            "_numRows" : "100000",
+            "_schemaEvolutionType" : "NONE"
+        },
+        "primaryMetric" : {
+            "score" : 5034.497172833333,
+            "scoreError" : 108.87790445433082,
+            "scoreConfidence" : [
+                4925.619268379002,
+                5143.375077287664
+            ],
+            "scorePercentiles" : {
+                "0.0" : 5006.327227333333,
+                "50.0" : 5037.855083333333,
+                "90.0" : 5073.480273333334,
+                "95.0" : 5073.480273333334,
+                "99.0" : 5073.480273333334,
+                "99.9" : 5073.480273333334,
+                "99.99" : 5073.480273333334,
+                "99.999" : 5073.480273333334,
+                "99.9999" : 5073.480273333334,
+                "100.0" : 5073.480273333334
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    5037.855083333333,
+                    5047.071816666667,
+                    5073.480273333334,
+                    5007.7514635,
+                    5006.327227333333
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "75",
+            "_numRows" : "100000",
+            "_schemaEvolutionType" : "ADD_COLUMNS"
+        },
+        "primaryMetric" : {
+            "score" : 5362.505247066667,
+            "scoreError" : 486.8939815719828,
+            "scoreConfidence" : [
+                4875.611265494684,
+                5849.39922863865
+            ],
+            "scorePercentiles" : {
+                "0.0" : 5222.065666666666,
+                "50.0" : 5377.355639333334,
+                "90.0" : 5552.095977333333,
+                "95.0" : 5552.095977333333,
+                "99.0" : 5552.095977333333,
+                "99.9" : 5552.095977333333,
+                "99.99" : 5552.095977333333,
+                "99.999" : 5552.095977333333,
+                "99.9999" : 5552.095977333333,
+                "100.0" : 5552.095977333333
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    5385.352526333333,
+                    5552.095977333333,
+                    5377.355639333334,
+                    5222.065666666666,
+                    5275.656425666667
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "75",
+            "_numRows" : "100000",
+            "_schemaEvolutionType" : "CHANGE_DATATYPES"
+        },
+        "primaryMetric" : {
+            "score" : 5495.100540033333,
+            "scoreError" : 1194.057748917741,
+            "scoreConfidence" : [
+                4301.042791115592,
+                6689.158288951075
+            ],
+            "scorePercentiles" : {
+                "0.0" : 4965.8285945,
+                "50.0" : 5560.938215666667,
+                "90.0" : 5773.994716333334,
+                "95.0" : 5773.994716333334,
+                "99.0" : 5773.994716333334,
+                "99.9" : 5773.994716333334,
+                "99.99" : 5773.994716333334,
+                "99.999" : 5773.994716333334,
+                "99.9999" : 5773.994716333334,
+                "100.0" : 5773.994716333334
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    4965.8285945,
+                    5560.938215666667,
+                    5535.612439,
+                    5773.994716333334,
+                    5639.128734666667
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "75",
+            "_numRows" : "500000",
+            "_schemaEvolutionType" : "NONE"
+        },
+        "primaryMetric" : {
+            "score" : 27459.1275562,
+            "scoreError" : 7923.520745569633,
+            "scoreConfidence" : [
+                19535.60681063037,
+                35382.64830176963
+            ],
+            "scorePercentiles" : {
+                "0.0" : 25140.883023,
+                "50.0" : 28715.270614,
+                "90.0" : 29163.735845,
+                "95.0" : 29163.735845,
+                "99.0" : 29163.735845,
+                "99.9" : 29163.735845,
+                "99.99" : 29163.735845,
+                "99.999" : 29163.735845,
+                "99.9999" : 29163.735845,
+                "100.0" : 29163.735845
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    28715.270614,
+                    29163.735845,
+                    28991.584487,
+                    25140.883023,
+                    25284.163812
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "75",
+            "_numRows" : "500000",
+            "_schemaEvolutionType" : "ADD_COLUMNS"
+        },
+        "primaryMetric" : {
+            "score" : 29921.964837800002,
+            "scoreError" : 3048.982859200285,
+            "scoreConfidence" : [
+                26872.981978599717,
+                32970.94769700029
+            ],
+            "scorePercentiles" : {
+                "0.0" : 28529.239913,
+                "50.0" : 30164.466692,
+                "90.0" : 30453.13383,
+                "95.0" : 30453.13383,
+                "99.0" : 30453.13383,
+                "99.9" : 30453.13383,
+                "99.99" : 30453.13383,
+                "99.999" : 30453.13383,
+                "99.9999" : 30453.13383,
+                "100.0" : 30453.13383
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    30364.93728,
+                    28529.239913,
+                    30164.466692,
+                    30098.046474,
+                    30453.13383
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "75",
+            "_numRows" : "500000",
+            "_schemaEvolutionType" : "CHANGE_DATATYPES"
+        },
+        "primaryMetric" : {
+            "score" : 27693.591774599998,
+            "scoreError" : 2332.358508549069,
+            "scoreConfidence" : [
+                25361.233266050927,
+                30025.950283149068
+            ],
+            "scorePercentiles" : {
+                "0.0" : 27131.677669,
+                "50.0" : 27627.942113,
+                "90.0" : 28687.065901,
+                "95.0" : 28687.065901,
+                "99.0" : 28687.065901,
+                "99.9" : 28687.065901,
+                "99.99" : 28687.065901,
+                "99.999" : 28687.065901,
+                "99.9999" : 28687.065901,
+                "100.0" : 28687.065901
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    28687.065901,
+                    27627.942113,
+                    27294.388898,
+                    27131.677669,
+                    27726.884292
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "75",
+            "_numRows" : "1000000",
+            "_schemaEvolutionType" : "NONE"
+        },
+        "primaryMetric" : {
+            "score" : 55221.8499068,
+            "scoreError" : 1764.0646734267675,
+            "scoreConfidence" : [
+                53457.78523337324,
+                56985.91458022677
+            ],
+            "scorePercentiles" : {
+                "0.0" : 54824.757085,
+                "50.0" : 55163.522922,
+                "90.0" : 55942.044472,
+                "95.0" : 55942.044472,
+                "99.0" : 55942.044472,
+                "99.9" : 55942.044472,
+                "99.99" : 55942.044472,
+                "99.999" : 55942.044472,
+                "99.9999" : 55942.044472,
+                "100.0" : 55942.044472
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    55339.147579,
+                    55163.522922,
+                    55942.044472,
+                    54839.777476,
+                    54824.757085
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "75",
+            "_numRows" : "1000000",
+            "_schemaEvolutionType" : "ADD_COLUMNS"
+        },
+        "primaryMetric" : {
+            "score" : 54842.63339819999,
+            "scoreError" : 2775.734732225628,
+            "scoreConfidence" : [
+                52066.89866597437,
+                57618.36813042562
+            ],
+            "scorePercentiles" : {
+                "0.0" : 54289.711032,
+                "50.0" : 54593.201618,
+                "90.0" : 56052.145681,
+                "95.0" : 56052.145681,
+                "99.0" : 56052.145681,
+                "99.9" : 56052.145681,
+                "99.99" : 56052.145681,
+                "99.999" : 56052.145681,
+                "99.9999" : 56052.145681,
+                "100.0" : 56052.145681
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    54926.062855,
+                    54289.711032,
+                    56052.145681,
+                    54593.201618,
+                    54352.045805
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "75",
+            "_numRows" : "1000000",
+            "_schemaEvolutionType" : "CHANGE_DATATYPES"
+        },
+        "primaryMetric" : {
+            "score" : 61072.729441999996,
+            "scoreError" : 2847.8728436557935,
+            "scoreConfidence" : [
+                58224.8565983442,
+                63920.60228565579
+            ],
+            "scorePercentiles" : {
+                "0.0" : 60292.669344,
+                "50.0" : 60791.619748,
+                "90.0" : 62166.874463,
+                "95.0" : 62166.874463,
+                "99.0" : 62166.874463,
+                "99.9" : 62166.874463,
+                "99.99" : 62166.874463,
+                "99.999" : 62166.874463,
+                "99.9999" : 62166.874463,
+                "100.0" : 62166.874463
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    60292.669344,
+                    60791.619748,
+                    60667.190554,
+                    61445.293101,
+                    62166.874463
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "100",
+            "_numRows" : "100000",
+            "_schemaEvolutionType" : "NONE"
+        },
+        "primaryMetric" : {
+            "score" : 7821.632885366666,
+            "scoreError" : 817.7213784549105,
+            "scoreConfidence" : [
+                7003.911506911756,
+                8639.354263821577
+            ],
+            "scorePercentiles" : {
+                "0.0" : 7589.990406,
+                "50.0" : 7767.768259333333,
+                "90.0" : 8120.0511095,
+                "95.0" : 8120.0511095,
+                "99.0" : 8120.0511095,
+                "99.9" : 8120.0511095,
+                "99.99" : 8120.0511095,
+                "99.999" : 8120.0511095,
+                "99.9999" : 8120.0511095,
+                "100.0" : 8120.0511095
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    7946.877847,
+                    8120.0511095,
+                    7767.768259333333,
+                    7683.476805,
+                    7589.990406
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "100",
+            "_numRows" : "100000",
+            "_schemaEvolutionType" : "ADD_COLUMNS"
+        },
+        "primaryMetric" : {
+            "score" : 7706.140880966666,
+            "scoreError" : 574.6162937733106,
+            "scoreConfidence" : [
+                7131.524587193356,
+                8280.757174739978
+            ],
+            "scorePercentiles" : {
+                "0.0" : 7484.910532333333,
+                "50.0" : 7735.0318045,
+                "90.0" : 7852.550253,
+                "95.0" : 7852.550253,
+                "99.0" : 7852.550253,
+                "99.9" : 7852.550253,
+                "99.99" : 7852.550253,
+                "99.999" : 7852.550253,
+                "99.9999" : 7852.550253,
+                "100.0" : 7852.550253
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    7852.550253,
+                    7735.0318045,
+                    7484.910532333333,
+                    7637.4391565,
+                    7820.7726585
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "100",
+            "_numRows" : "100000",
+            "_schemaEvolutionType" : "CHANGE_DATATYPES"
+        },
+        "primaryMetric" : {
+            "score" : 7736.066632,
+            "scoreError" : 1385.5893341577214,
+            "scoreConfidence" : [
+                6350.477297842279,
+                9121.655966157721
+            ],
+            "scorePercentiles" : {
+                "0.0" : 7364.805357,
+                "50.0" : 7588.3879715,
+                "90.0" : 8257.5897135,
+                "95.0" : 8257.5897135,
+                "99.0" : 8257.5897135,
+                "99.9" : 8257.5897135,
+                "99.99" : 8257.5897135,
+                "99.999" : 8257.5897135,
+                "99.9999" : 8257.5897135,
+                "100.0" : 8257.5897135
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    7942.4839915,
+                    8257.5897135,
+                    7364.805357,
+                    7527.0661265,
+                    7588.3879715
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "100",
+            "_numRows" : "500000",
+            "_schemaEvolutionType" : "NONE"
+        },
+        "primaryMetric" : {
+            "score" : 39507.35651699999,
+            "scoreError" : 5440.938502085516,
+            "scoreConfidence" : [
+                34066.418014914474,
+                44948.29501908551
+            ],
+            "scorePercentiles" : {
+                "0.0" : 38101.102119,
+                "50.0" : 39387.13453,
+                "90.0" : 41689.236063,
+                "95.0" : 41689.236063,
+                "99.0" : 41689.236063,
+                "99.9" : 41689.236063,
+                "99.99" : 41689.236063,
+                "99.999" : 41689.236063,
+                "99.9999" : 41689.236063,
+                "100.0" : 41689.236063
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    41689.236063,
+                    39387.13453,
+                    39893.389308,
+                    38465.920565,
+                    38101.102119
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "100",
+            "_numRows" : "500000",
+            "_schemaEvolutionType" : "ADD_COLUMNS"
+        },
+        "primaryMetric" : {
+            "score" : 36305.1447928,
+            "scoreError" : 1140.5904327988721,
+            "scoreConfidence" : [
+                35164.55436000112,
+                37445.73522559887
+            ],
+            "scorePercentiles" : {
+                "0.0" : 35975.431335,
+                "50.0" : 36354.69491,
+                "90.0" : 36663.125177,
+                "95.0" : 36663.125177,
+                "99.0" : 36663.125177,
+                "99.9" : 36663.125177,
+                "99.99" : 36663.125177,
+                "99.999" : 36663.125177,
+                "99.9999" : 36663.125177,
+                "100.0" : 36663.125177
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    36499.272918,
+                    36354.69491,
+                    36033.199624,
+                    36663.125177,
+                    35975.431335
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "100",
+            "_numRows" : "500000",
+            "_schemaEvolutionType" : "CHANGE_DATATYPES"
+        },
+        "primaryMetric" : {
+            "score" : 38837.230480000006,
+            "scoreError" : 2100.8236251704707,
+            "scoreConfidence" : [
+                36736.40685482953,
+                40938.05410517048
+            ],
+            "scorePercentiles" : {
+                "0.0" : 38081.901909,
+                "50.0" : 38801.064061,
+                "90.0" : 39542.011201,
+                "95.0" : 39542.011201,
+                "99.0" : 39542.011201,
+                "99.9" : 39542.011201,
+                "99.99" : 39542.011201,
+                "99.999" : 39542.011201,
+                "99.9999" : 39542.011201,
+                "100.0" : 39542.011201
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    38637.366293,
+                    38081.901909,
+                    39542.011201,
+                    38801.064061,
+                    39123.808936
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "100",
+            "_numRows" : "1000000",
+            "_schemaEvolutionType" : "NONE"
+        },
+        "primaryMetric" : {
+            "score" : 81455.61830280001,
+            "scoreError" : 18801.18153105124,
+            "scoreConfidence" : [
+                62654.43677174877,
+                100256.79983385126
+            ],
+            "scorePercentiles" : {
+                "0.0" : 78684.625725,
+                "50.0" : 78980.06337,
+                "90.0" : 90034.964067,
+                "95.0" : 90034.964067,
+                "99.0" : 90034.964067,
+                "99.9" : 90034.964067,
+                "99.99" : 90034.964067,
+                "99.999" : 90034.964067,
+                "99.9999" : 90034.964067,
+                "100.0" : 90034.964067
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    80883.223728,
+                    78684.625725,
+                    90034.964067,
+                    78980.06337,
+                    78695.214624
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "100",
+            "_numRows" : "1000000",
+            "_schemaEvolutionType" : "ADD_COLUMNS"
+        },
+        "primaryMetric" : {
+            "score" : 98642.9639264,
+            "scoreError" : 29002.517994561582,
+            "scoreConfidence" : [
+                69640.44593183842,
+                127645.48192096158
+            ],
+            "scorePercentiles" : {
+                "0.0" : 92294.178548,
+                "50.0" : 94808.914248,
+                "90.0" : 107789.541242,
+                "95.0" : 107789.541242,
+                "99.0" : 107789.541242,
+                "99.9" : 107789.541242,
+                "99.99" : 107789.541242,
+                "99.999" : 107789.541242,
+                "99.9999" : 107789.541242,
+                "100.0" : 107789.541242
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    94808.914248,
+                    92294.178548,
+                    92538.707817,
+                    105783.477777,
+                    107789.541242
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    },
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "org.apache.pinot.perf.BenchmarkRefreshSegmentTask.benchmarkRowBasedRefresh",
+        "mode" : "avgt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/home/user/.sdkman/candidates/java/11.0.23-tem/bin/java",
+        "jvmArgs" : [
+            "-Xmx4g",
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=100"
+        ],
+        "jdkVersion" : "11.0.23",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "11.0.23+9",
+        "warmupIterations" : 3,
+        "warmupTime" : "10 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 5,
+        "measurementTime" : "15 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "_numColumns" : "100",
+            "_numRows" : "1000000",
+            "_schemaEvolutionType" : "CHANGE_DATATYPES"
+        },
+        "primaryMetric" : {
+            "score" : 79157.7164886,
+            "scoreError" : 21204.68272109508,
+            "scoreConfidence" : [
+                57953.033767504916,
+                100362.39920969508
+            ],
+            "scorePercentiles" : {
+                "0.0" : 74463.564891,
+                "50.0" : 79311.80964,
+                "90.0" : 87994.428466,
+                "95.0" : 87994.428466,
+                "99.0" : 87994.428466,
+                "99.9" : 87994.428466,
+                "99.99" : 87994.428466,
+                "99.999" : 87994.428466,
+                "99.9999" : 87994.428466,
+                "100.0" : 87994.428466
+            },
+            "scoreUnit" : "ms/op",
+            "rawData" : [
+                [
+                    79450.904796,
+                    74567.87465,
+                    79311.80964,
+                    87994.428466,
+                    74463.564891
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+        }
+    }
+]
+
+
