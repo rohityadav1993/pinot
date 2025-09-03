@@ -198,6 +198,10 @@
               <mainClass>org.apache.pinot.perf.StringDictionaryPerfTest</mainClass>
               <name>pinot-StringDictionaryPerfTest</name>
             </program>
+            <program>
+              <mainClass>org.apache.pinot.perf.SegmentRefreshBenchmark</mainClass>
+              <name>pinot-SegmentRefreshBenchmark</name>
+            </program>
           </programs>
           <repositoryLayout>flat</repositoryLayout>
           <repositoryName>lib</repositoryName>
@@ -219,6 +223,7 @@
           </platforms>
         </configuration>
       </plugin>
+
     </plugins>
   </build>
   <profiles>
