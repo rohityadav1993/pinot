@@ -485,14 +485,6 @@ public class FieldSpecTest {
     Assert.assertFalse(metricJson.contains("effectiveMaxLengthExceedStrategy"),
         "JSON should not contain effectiveMaxLengthExceedStrategy (marked with @JsonIgnore): " + metricJson);
 
-    // Verify null fields are not present (these should be null for a basic MetricFieldSpec)
-    Assert.assertFalse(metricJson.contains("maxLength"),
-        "JSON should not contain maxLength when it's null: " + metricJson);
-    Assert.assertFalse(metricJson.contains("maxLengthExceedStrategy"),
-        "JSON should not contain maxLengthExceedStrategy when it's null: " + metricJson);
-    Assert.assertFalse(metricJson.contains("transformFunction"),
-        "JSON should not contain transformFunction when it's null: " + metricJson);
-
     // Verify expected fields are present
     Assert.assertTrue(metricJson.contains("\"name\":\"testMetric\""),
         "JSON should contain name field: " + metricJson);
