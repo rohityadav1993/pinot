@@ -204,9 +204,18 @@ public class GrpcConnection implements AutoCloseable {
     }
     if (schemaJsonNode != null && rows != null) {
       ObjectNode resultTable = JsonUtils.newObjectNode();
-      resultTable.putIfAbsent("dataSchema", schemaJsonNode);
-      resultTable.putIfAbsent("rows", rows);
-      brokerResponseJson.putIfAbsent("resultTable", resultTable);
+      if (!resultTable.has("dataSchema")) {
+        // If dataSchema is not present, add it
+        resultTable.set("dataSchema", schemaJsonNode);
+      }
+      if (!resultTable.has("rows")) {
+        // If rows is not present, add it
+        resultTable.set("rows", rows);
+      }
+      if (!resultTable.has("resultTable")) {
+        // If totalDocs is not present, add it
+        brokerResponseJson.set("resultTable", resultTable);
+      }
     }
 
     return brokerResponseJson;

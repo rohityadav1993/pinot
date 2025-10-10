@@ -75,7 +75,10 @@ public class TimeSeriesPlanSerde {
         inputs = objectNode.get("inputs");
         objectNode.remove("inputs");
       }
-      objectNode.putIfAbsent("inputs", OBJECT_MAPPER.createArrayNode());
+      // Jackson 2.11: no putIfAbsent, so check manually
+      if (!objectNode.has("inputs")) {
+        objectNode.set("inputs", OBJECT_MAPPER.createArrayNode());
+      }
     }
     BaseTimeSeriesPlanNode planNode = null;
     try {

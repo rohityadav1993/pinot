@@ -21,6 +21,7 @@ package org.apache.pinot.query.runtime;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.function.IntFunction;
@@ -66,7 +67,14 @@ public class InStageStatsTreeBuilder implements PlanNodeVisitor<ObjectNode, InSt
   private ObjectNode selfNode(MultiStageOperator.Type type, Context context) {
     ObjectNode json = JsonUtils.newObjectNode();
     json.put("type", type.toString());
-    for (Map.Entry<String, JsonNode> entry : _stageStats.getOperatorStats(_index).asJson().properties()) {
+
+    // Get the JsonNode representing operator stats
+    JsonNode operatorStatsJson = _stageStats.getOperatorStats(_index).asJson();
+
+    // Jackson 2.11 workaround for .properties()
+    Iterator<Map.Entry<String, JsonNode>> fields = operatorStatsJson.fields();
+    while (fields.hasNext()) {
+      Map.Entry<String, JsonNode> entry = fields.next();
       json.set(entry.getKey(), entry.getValue());
     }
 
