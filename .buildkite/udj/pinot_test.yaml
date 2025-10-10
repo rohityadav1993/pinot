@@ -1,0 +1,5 @@
+version: 1.0
+uown: eefa6898-cb13-4fd0-9a6f-ee3ff558888d #upinot
+command: |
+  export NODE_ENV=development; git checkout $BUILDKITE_BRANCH; chmod +x .buildkite/test.sh; if [ -f ".buildkite/test.sh" ]; then .buildkite/test.sh; fi;
+timeout_in_minutes: 90

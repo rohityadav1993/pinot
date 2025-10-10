@@ -1,0 +1,5 @@
+version: 1.0
+uown: eefa6898-cb13-4fd0-9a6f-ee3ff558888d #upinot
+command: |
+  export NODE_ENV=development; git checkout $BUILDKITE_BRANCH; if [ -f ".buildkite/release.sh" ]; then .buildkite/release.sh;else release_opts=;if [ -n "$RELEASE_VERSION" ]; then release_opts="$release_opts -DreleaseVersion=$RELEASE_VERSION"; fi; if [ -n "$NEXT_VERSION" ]; then release_opts="$release_opts -DdevelopmentVersion=$NEXT_VERSION"; fi; mvn -B release:clean release:prepare release:perform $release_opts; fi;
+timeout_in_minutes: 300

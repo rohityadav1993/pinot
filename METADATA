@@ -1,0 +1,12 @@
+---
+schema:
+  version: 1
+---
+reviewers:
+  groups:
+    - rta-group
+---
+bots:  # optional (defaults to [])
+  - service_bot
+  - buildkite
+  - buildkite_bot
