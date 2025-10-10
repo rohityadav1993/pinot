@@ -210,10 +210,6 @@ public class IngestionDelayTracker {
         _serverMetrics.removePartitionGauge(_metricName, partitionId, ServerGauge.REALTIME_INGESTION_DELAY_MS);
         _serverMetrics.removePartitionGauge(_metricName, partitionId,
             ServerGauge.END_TO_END_REALTIME_INGESTION_DELAY_MS);
-        _serverMetrics.removePartitionGauge(_metricName, partitionId, ServerGauge.REALTIME_INGESTION_OFFSET_LAG);
-        _serverMetrics.removePartitionGauge(_metricName, partitionId, ServerGauge.REALTIME_INGESTION_UPSTREAM_OFFSET);
-        _serverMetrics.removePartitionGauge(_metricName, partitionId, ServerGauge.REALTIME_INGESTION_CONSUMING_OFFSET);
-        LOGGER.info("Successfully removed ingestion metrics for partition id: {}", partitionId);
       }
       return null;
     });
@@ -288,20 +284,6 @@ public class IngestionDelayTracker {
           _serverMetrics.setOrUpdatePartitionGauge(_metricName, partitionId,
               ServerGauge.END_TO_END_REALTIME_INGESTION_DELAY_MS,
               () -> getPartitionEndToEndIngestionDelayMs(partitionId));
-        }
-        if (currentOffset != null && latestOffset != null) {
-          _serverMetrics.setOrUpdatePartitionGauge(_metricName, partitionId, ServerGauge.REALTIME_INGESTION_OFFSET_LAG,
-              () -> getPartitionIngestionOffsetLag(partitionId));
-        }
-
-        if (currentOffset != null) {
-          _serverMetrics.setOrUpdatePartitionGauge(_metricName, partitionId,
-              ServerGauge.REALTIME_INGESTION_CONSUMING_OFFSET, () -> getPartitionIngestionConsumingOffset(partitionId));
-        }
-
-        if (latestOffset != null) {
-          _serverMetrics.setOrUpdatePartitionGauge(_metricName, partitionId,
-              ServerGauge.REALTIME_INGESTION_UPSTREAM_OFFSET, () -> getPartitionIngestionUpstreamOffset(partitionId));
         }
       }
       return new IngestionInfo(ingestionTimeMs, firstStreamIngestionTimeMs, currentOffset, latestOffset);
