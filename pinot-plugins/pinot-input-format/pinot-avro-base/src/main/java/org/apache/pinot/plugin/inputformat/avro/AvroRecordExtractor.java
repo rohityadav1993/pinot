@@ -39,7 +39,7 @@ import org.apache.pinot.spi.data.readers.RecordExtractorConfig;
 public class AvroRecordExtractor extends BaseRecordExtractor<GenericRecord> {
   private Set<String> _fields;
   private boolean _extractAll = false;
-  private boolean _applyLogicalTypes = true;
+  private boolean _applyLogicalTypes = false;
 
   @Override
   public void init(@Nullable Set<String> fields, @Nullable RecordExtractorConfig recordExtractorConfig) {
