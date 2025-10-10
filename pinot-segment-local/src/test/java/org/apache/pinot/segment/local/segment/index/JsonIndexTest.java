@@ -930,6 +930,7 @@ public class JsonIndexTest implements PinotBuffersAfterMethodCheckRule {
   public void testSkipInvalidJsonDisabledContinueOnErrorFalse() throws Exception {
     // by default, skipInvalidJson is disabled
     JsonIndexConfig jsonIndexConfig = getIndexConfig();
+    jsonIndexConfig.setSkipInvalidJson(false);
     // the braces don't match and cannot be parsed
     String[] records = {"{\"key1\":\"va\""};
 
