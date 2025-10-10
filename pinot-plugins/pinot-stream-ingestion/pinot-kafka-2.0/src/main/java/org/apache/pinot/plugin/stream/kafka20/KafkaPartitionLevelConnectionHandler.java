@@ -20,11 +20,15 @@ package org.apache.pinot.plugin.stream.kafka20;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.util.concurrent.Uninterruptibles;
+import com.uber.data.kafka.resolvers.brokers.BrokerResolver;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
@@ -63,6 +67,35 @@ public abstract class KafkaPartitionLevelConnectionHandler {
     _partition = partition;
     _topic = _config.getKafkaTopicName();
     _consumerProp = buildProperties(streamConfig);
+
+    String bootStrapHosts = _config.getBootstrapHosts();
+    LOGGER.info("BootStrap Hosts : {}", bootStrapHosts);
+
+    ArrayList<String> bootStrapHostsList =
+        Stream.of(bootStrapHosts.split(","))
+            .collect(Collectors.toCollection(ArrayList<String>::new));
+
+    // Ensure if all of the bootstrap servers have port not equal to 9443 / all having 9443 , else flag
+    int securedBrokerCount = 0;
+    String port;
+    for (String host : bootStrapHostsList) {
+      port = host.split(":")[1];
+      if (port.equals(Integer.toString(BrokerResolver.SECURE_KAFKA_PORT))) {
+        securedBrokerCount++;
+      }
+    }
+    if (securedBrokerCount != 0 && bootStrapHostsList.size() != securedBrokerCount) {
+      LOGGER.error("Partial Brokers in broker list have secure port : {}", BrokerResolver.SECURE_KAFKA_PORT);
+    }
+
+    // TODO: Make SSL properties as default after the migration is completed
+    // pinot server would consume from broker having ssl
+    if (securedBrokerCount > 0) {
+      _consumerProp.put("security.protocol", "SSL");
+      _consumerProp.put("ssl.trustmanager.algorithm", "UPKI");
+      _consumerProp.put("ssl.keymanager.algorithm", "UPKI");
+      _consumerProp.put("security.providers", "com.uber.kafka.security.provider.KafkaUPKIProviderCreator");
+    }
     KafkaSSLUtils.initSSL(_consumerProp);
     _consumer = createConsumer(_consumerProp);
     _topicPartition = new TopicPartition(_topic, _partition);
