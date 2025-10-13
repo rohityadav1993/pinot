@@ -55,6 +55,7 @@ import org.apache.pinot.query.runtime.operator.OpChain;
 import org.apache.pinot.query.runtime.operator.SortOperator;
 import org.apache.pinot.query.runtime.operator.SortedMailboxReceiveOperator;
 import org.apache.pinot.query.runtime.operator.TransformOperator;
+import org.apache.pinot.query.runtime.operator.UnionAllOperator;
 import org.apache.pinot.query.runtime.operator.UnionOperator;
 import org.apache.pinot.query.runtime.operator.WindowAggregateOperator;
 import org.apache.pinot.query.runtime.plan.server.ServerPlanRequestContext;
@@ -149,7 +150,9 @@ public class PlanNodeToOpChain {
       }
       switch (setOpNode.getSetOpType()) {
         case UNION:
-          return new UnionOperator(context, inputOperators, setOpNode.getInputs().get(0).getDataSchema());
+            return setOpNode.isAll() ? new UnionAllOperator(context, inputOperators,
+                    setOpNode.getInputs().get(0).getDataSchema())
+                    : new UnionOperator(context, inputOperators, setOpNode.getInputs().get(0).getDataSchema());
         case INTERSECT:
           return setOpNode.isAll() ? new IntersectAllOperator(context, inputOperators,
               setOpNode.getInputs().get(0).getDataSchema())
