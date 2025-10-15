@@ -24,7 +24,7 @@
   <parent>
     <artifactId>pinot</artifactId>
     <groupId>org.apache.pinot</groupId>
-    <version>1.4.1-uber-SNAPSHOT</version>
+    <version>1.4.0-uber</version>
   </parent>
   <artifactId>pinot-minion</artifactId>
   <name>Pinot Minion</name>
