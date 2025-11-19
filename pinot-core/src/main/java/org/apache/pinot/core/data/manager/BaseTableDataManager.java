@@ -153,6 +153,8 @@ public abstract class BaseTableDataManager implements TableDataManager {
   protected volatile Pair<TableConfig, Schema> _cachedTableConfigAndSchema;
 
   protected volatile boolean _shutDown;
+  // Table-level skip flag: when true, CRC checks are skipped for this specific table regardless of instance default.
+  protected boolean _skipCrcCheckForThisTable;
 
   @Override
   public void init(InstanceDataManagerConfig instanceDataManagerConfig, HelixManager helixManager,
@@ -174,6 +176,8 @@ public abstract class BaseTableDataManager implements TableDataManager {
 
     _tableNameWithType = tableConfig.getTableName();
     _tableDataDir = instanceDataManagerConfig.getInstanceDataDir() + File.separator + _tableNameWithType;
+    _skipCrcCheckForThisTable =
+        tableConfig.getValidationConfig() != null && tableConfig.getValidationConfig().isSkipCrcCheckOnLoad();
     _indexDir = new File(_tableDataDir);
     if (!_indexDir.exists()) {
       Preconditions.checkState(_indexDir.mkdirs(), "Unable to create index directory at %s. "
@@ -421,6 +425,12 @@ public abstract class BaseTableDataManager implements TableDataManager {
     SegmentMetadata localMetadata = segmentDataManager.getSegment().getSegmentMetadata();
     if (hasSameCRC(zkMetadata, localMetadata)) {
       _logger.info("Segment: {} has CRC: {} same as before, not replacing it", segmentName, localMetadata.getCrc());
+      return;
+    }
+    if (_skipCrcCheckForThisTable) {
+      _logger.info("Skipping replacing segment: {} even though its CRC has changed from: {} to: {} because "
+          + "skipCrcCheckOnLoad is enabled", segmentName, localMetadata.getCrc(),
+          zkMetadata.getCrc());
       return;
     }
     _logger.info("Replacing segment: {} because its CRC has changed from: {} to: {}", segmentName,
@@ -793,8 +803,8 @@ public abstract class BaseTableDataManager implements TableDataManager {
       - Copy the backup directory back to the original index directory.
       - Continue loading the segment from the index directory.
       */
-      boolean shouldDownload =
-          forceDownload || (isSegmentStatusCompleted(zkMetadata) && !hasSameCRC(zkMetadata, localMetadata));
+      boolean shouldDownload = forceDownload || (isSegmentStatusCompleted(zkMetadata)
+          && !hasSameCRC(zkMetadata, localMetadata) && !_skipCrcCheckForThisTable);
       if (shouldDownload) {
         // Create backup directory to handle failure of segment reloading.
         createBackup(indexDir);
@@ -1189,15 +1199,19 @@ public abstract class BaseTableDataManager implements TableDataManager {
     Then:
     We need to fall back to downloading the segment from deep storage to load it.
     */
-    if (segmentMetadata == null || (isSegmentStatusCompleted(zkMetadata) && !hasSameCRC(zkMetadata, segmentMetadata))) {
-      if (segmentMetadata == null) {
-        _logger.info("Segment: {} does not exist", segmentName);
-      } else if (!hasSameCRC(zkMetadata, segmentMetadata)) {
-        _logger.info("Segment: {} has CRC changed from: {} to: {}", segmentName, segmentMetadata.getCrc(),
-            zkMetadata.getCrc());
-      }
+    if (segmentMetadata == null) {
+      _logger.info("Segment: {} does not exist", segmentName);
       closeSegmentDirectoryQuietly(segmentDirectory);
       return false;
+    }
+    if (isSegmentStatusCompleted(zkMetadata) && !hasSameCRC(zkMetadata, segmentMetadata)) {
+      _logger.warn("Segment: {} has CRC changed from: {} to: {}", segmentName, segmentMetadata.getCrc(),
+          zkMetadata.getCrc());
+      if (!_skipCrcCheckForThisTable) {
+        closeSegmentDirectoryQuietly(segmentDirectory);
+        return false;
+      }
+      _logger.info("Skipping CRC check for segment: {} as configured. Proceed to load segment.", segmentName);
     }
 
     try {

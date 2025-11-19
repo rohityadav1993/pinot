@@ -52,6 +52,8 @@ public class SegmentsValidationAndRetentionConfig extends BaseJsonConfig {
   // using the specified download scheme. Both realtime tables and offline tables can set this field.
   // For more usage of this field, please refer to this design doc: https://tinyurl.com/f63ru4sb
   private String _peerSegmentDownloadScheme;
+  // Skip CRC check for segment load at table level; defaults to false
+  private boolean _skipCrcCheckOnLoad;
 
   private String _untrackedSegmentsDeletionBatchSize;
 
@@ -244,5 +246,13 @@ public class SegmentsValidationAndRetentionConfig extends BaseJsonConfig {
 
   public void setUntrackedSegmentsDeletionBatchSize(String untrackedSegmentsDeletionBatchSize) {
     _untrackedSegmentsDeletionBatchSize = untrackedSegmentsDeletionBatchSize;
+  }
+
+  public boolean isSkipCrcCheckOnLoad() {
+    return _skipCrcCheckOnLoad;
+  }
+
+  public void setSkipCrcCheckOnLoad(boolean skipCrcCheckOnLoad) {
+    _skipCrcCheckOnLoad = skipCrcCheckOnLoad;
   }
 }
