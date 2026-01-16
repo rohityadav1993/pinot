@@ -24,7 +24,7 @@
   <parent>
     <artifactId>pinot-file-system</artifactId>
     <groupId>org.apache.pinot</groupId>
-    <version>1.4.2-uber</version>
+    <version>1.4.3-uber-SNAPSHOT</version>
   </parent>
   <artifactId>pinot-adls</artifactId>
   <name>Pinot Azure Data Lake Storage</name>

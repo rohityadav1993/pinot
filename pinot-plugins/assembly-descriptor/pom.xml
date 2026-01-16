@@ -24,7 +24,7 @@
   <parent>
     <groupId>org.apache.pinot</groupId>
     <artifactId>pinot-plugins</artifactId>
-    <version>1.4.2-uber</version>
+    <version>1.4.3-uber-SNAPSHOT</version>
   </parent>
 
   <artifactId>assembly-descriptor</artifactId>
