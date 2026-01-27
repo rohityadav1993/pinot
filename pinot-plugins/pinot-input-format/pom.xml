@@ -24,7 +24,7 @@
   <parent>
     <artifactId>pinot-plugins</artifactId>
     <groupId>org.apache.pinot</groupId>
-    <version>1.4.3-uber-SNAPSHOT</version>
+    <version>1.4.3-uber</version>
   </parent>
 
   <artifactId>pinot-input-format</artifactId>
