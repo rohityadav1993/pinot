@@ -131,7 +131,8 @@ public class TimeSeriesRequestHandler extends BaseBrokerRequestHandler {
       try {
         timeSeriesRequest = buildRangeTimeSeriesRequest(lang, rawQueryParamString, queryParams);
       } catch (URISyntaxException e) {
-        throw new QueryException(QueryErrorCode.TIMESERIES_PARSING, "Error building RangeTimeSeriesRequest", e);
+        throw new QueryException(QueryErrorCode.TIMESERIES_PARSING, "Error building RangeTimeSeriesRequest: "
+          + e.getMessage(), e);
       }
       TimeSeriesLogicalPlanResult logicalPlanResult = _queryEnvironment.buildLogicalPlan(timeSeriesRequest);
       // If there are no buckets in the logical plan, return an empty response.
@@ -150,7 +151,7 @@ public class TimeSeriesRequestHandler extends BaseBrokerRequestHandler {
       if (e instanceof QueryException) {
         throw (QueryException) e;
       } else {
-        throw new QueryException(QueryErrorCode.UNKNOWN, "Error processing time-series query", e);
+        throw new QueryException(QueryErrorCode.UNKNOWN, e.getClass().getSimpleName() + ": " + e.getMessage(), e);
       }
     } finally {
       _brokerMetrics.addTimedValue(BrokerTimer.QUERY_TOTAL_TIME_MS, System.currentTimeMillis() - queryStartTime,
