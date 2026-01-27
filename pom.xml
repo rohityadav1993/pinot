@@ -31,7 +31,7 @@
 
   <groupId>org.apache.pinot</groupId>
   <artifactId>pinot</artifactId>
-  <version>1.4.3-uber</version>
+  <version>1.4.4-uber-SNAPSHOT</version>
   <packaging>pom</packaging>
   <name>Pinot</name>
   <description>A realtime distributed OLAP datastore</description>
@@ -100,7 +100,7 @@
 
   <scm>
     <developerConnection>scm:git:gitolite@code.uber.internal:data/pinot</developerConnection>
-    <tag>pinot-1.4.3-uber</tag>
+    <tag>uber-release-1.4.0-rc0</tag>
   </scm>
 
   <distributionManagement>

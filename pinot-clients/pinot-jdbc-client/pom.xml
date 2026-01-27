@@ -24,7 +24,7 @@
   <parent>
     <artifactId>pinot-clients</artifactId>
     <groupId>org.apache.pinot</groupId>
-    <version>1.4.3-uber</version>
+    <version>1.4.4-uber-SNAPSHOT</version>
   </parent>
   <artifactId>pinot-jdbc-client</artifactId>
   <name>Pinot JDBC Client</name>
