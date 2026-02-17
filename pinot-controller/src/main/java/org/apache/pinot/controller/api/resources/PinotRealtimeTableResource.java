@@ -52,6 +52,8 @@ import org.apache.helix.model.ExternalView;
 import org.apache.helix.model.IdealState;
 import org.apache.pinot.common.utils.DatabaseUtils;
 import org.apache.pinot.controller.ControllerConf;
+import org.apache.pinot.controller.api.access.AccessType;
+import org.apache.pinot.controller.api.access.Authenticate;
 import org.apache.pinot.controller.api.exception.ControllerApplicationException;
 import org.apache.pinot.controller.helix.core.PinotHelixResourceManager;
 import org.apache.pinot.controller.helix.core.controllerjob.ControllerJobTypes;
@@ -105,6 +107,7 @@ public class PinotRealtimeTableResource {
 
   @POST
   @Path("/tables/{tableName}/pauseConsumption")
+  @Authenticate(AccessType.UPDATE)
   @Authorize(targetType = TargetType.TABLE, paramName = "tableName", action = Actions.Table.PAUSE_CONSUMPTION)
   @Produces(MediaType.APPLICATION_JSON)
   @ApiOperation(value = "Pause consumption of a realtime table", notes = "Pause the consumption of a realtime table")
@@ -125,6 +128,7 @@ public class PinotRealtimeTableResource {
 
   @POST
   @Path("/tables/{tableName}/resumeConsumption")
+  @Authenticate(AccessType.UPDATE)
   @Authorize(targetType = TargetType.TABLE, paramName = "tableName", action = Actions.Table.RESUME_CONSUMPTION)
   @Produces(MediaType.APPLICATION_JSON)
   @ApiOperation(value = "Resume consumption of a realtime table", notes =
@@ -162,6 +166,7 @@ public class PinotRealtimeTableResource {
 
   @POST
   @Path("/tables/{tableName}/forceCommit")
+  @Authenticate(AccessType.UPDATE)
   @Authorize(targetType = TargetType.TABLE, paramName = "tableName", action = Actions.Table.FORCE_COMMIT)
   @Produces(MediaType.APPLICATION_JSON)
   @ApiOperation(value = "Force commit the current consuming segments",

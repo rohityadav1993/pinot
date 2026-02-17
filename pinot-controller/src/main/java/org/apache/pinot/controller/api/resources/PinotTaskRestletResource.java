@@ -248,6 +248,7 @@ public class PinotTaskRestletResource {
 
   @DELETE
   @Path("/tasks/{taskType}/{tableNameWithType}/metadata")
+  @Authenticate(AccessType.DELETE)
   @Authorize(targetType = TargetType.CLUSTER, action = Actions.Cluster.DELETE_TASK)
   @Produces(MediaType.APPLICATION_JSON)
   @ApiOperation("Delete task metadata for the given task type and table")
