@@ -24,7 +24,7 @@
   <parent>
     <groupId>org.apache.pinot</groupId>
     <artifactId>pinot-timeseries</artifactId>
-    <version>1.4.4-uber-SNAPSHOT</version>
+    <version>1.4.4-uber</version>
   </parent>
 
   <artifactId>pinot-timeseries-spi</artifactId>

@@ -24,7 +24,7 @@
   <parent>
     <artifactId>pinot-batch-ingestion</artifactId>
     <groupId>org.apache.pinot</groupId>
-    <version>1.4.4-uber-SNAPSHOT</version>
+    <version>1.4.4-uber</version>
   </parent>
 
   <artifactId>pinot-batch-ingestion-hadoop</artifactId>
