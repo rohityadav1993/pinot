@@ -1757,12 +1757,12 @@
       <dependency>
         <groupId>org.apache.kafka</groupId>
         <artifactId>kafka-clients</artifactId>
-        <version>${uberkafka.lib.version}</version>
+        <version>${kafka2.version}</version>
       </dependency>
       <dependency>
         <groupId>org.apache.kafka</groupId>
         <artifactId>kafka_${scala.compat.version}</artifactId>
-        <version>${uberkafka.lib.version}</version>
+        <version>${kafka2.version}</version>
       </dependency>
       <!-- Uber internal -->
       <dependency>
