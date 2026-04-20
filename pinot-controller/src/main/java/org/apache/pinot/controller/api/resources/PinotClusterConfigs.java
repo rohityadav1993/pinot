@@ -158,7 +158,7 @@ public class PinotClusterConfigs {
   @Path("/cluster/configs/{configName}")
   @Authorize(targetType = TargetType.CLUSTER, action = Actions.Cluster.DELETE_CLUSTER_CONFIG)
   @Authenticate(AccessType.DELETE)
-  @ApiOperation(value = "Delete cluster configuration")
+  @ApiOperation(value = "Delete cluster configuration", hidden = true)
   @Produces(MediaType.APPLICATION_JSON)
   @ApiResponses(value = {
       @ApiResponse(code = 200, message = "Success"),

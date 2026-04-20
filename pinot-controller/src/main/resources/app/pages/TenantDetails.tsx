@@ -678,8 +678,9 @@ const TenantPageDetails = ({ match }: RouteComponentProps<Props>) => {
                 Edit Table
               </CustomButton>
               <CustomButton
+                isDisabled={true}
                 onClick={handleDeleteTableAction}
-                tooltipTitle="Delete Table"
+                tooltipTitle="Deleting tables from the controller UI is disabled. Use the REST API or CLI if your deployment allows it."
                 enableTooltip={true}
               >
                 Delete Table

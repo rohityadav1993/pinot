@@ -255,9 +255,9 @@ const SchemaPageDetails = ({ match }: RouteComponentProps<Props>) => {
                 Edit Schema
               </CustomButton>
               <CustomButton
-                isDisabled={!schemaJSON}
+                isDisabled={true}
                 onClick={handleDeleteSchemaAction}
-                tooltipTitle="Delete Schema"
+                tooltipTitle="Deleting schemas from the controller UI is disabled. Use the REST API or CLI if your deployment allows it."
                 enableTooltip={true}
               >
                 Delete Schema

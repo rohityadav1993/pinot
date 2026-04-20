@@ -44,18 +44,22 @@ export default function CustomButton({
 }: Props) {
   const classes = useStyles();
 
+  const button = (
+    <Button
+      variant="contained"
+      color="primary"
+      className={classes.button}
+      size="small"
+      onClick={onClick}
+      disabled={isDisabled}
+    >
+      {children}
+    </Button>
+  );
+
   return (
     <Tooltip title={tooltipTitle} disableHoverListener={!enableTooltip} placement="top" arrow>
-      <Button
-        variant="contained"
-        color="primary"
-        className={classes.button}
-        size="small"
-        onClick={onClick}
-        disabled={isDisabled}
-      >
-        {children}
-      </Button>
+      {isDisabled ? <span style={{ display: 'inline-flex' }}>{button}</span> : button}
     </Tooltip>
   );
 }

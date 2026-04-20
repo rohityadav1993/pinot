@@ -251,7 +251,7 @@ public class PinotTaskRestletResource {
   @Authenticate(AccessType.DELETE)
   @Authorize(targetType = TargetType.CLUSTER, action = Actions.Cluster.DELETE_TASK)
   @Produces(MediaType.APPLICATION_JSON)
-  @ApiOperation("Delete task metadata for the given task type and table")
+  @ApiOperation(value = "Delete task metadata for the given task type and table", hidden = true)
   public SuccessResponse deleteTaskMetadataByTable(
       @ApiParam(value = "Task type", required = true) @PathParam("taskType") String taskType,
       @ApiParam(value = "Table name with type", required = true) @PathParam("tableNameWithType")
@@ -748,7 +748,7 @@ public class PinotTaskRestletResource {
   @Authorize(targetType = TargetType.CLUSTER, action = Actions.Cluster.DELETE_TASK)
   @Produces(MediaType.APPLICATION_JSON)
   @Authenticate(AccessType.DELETE)
-  @ApiOperation("Delete all tasks (as well as the task queue) for the given task type")
+  @ApiOperation(value = "Delete all tasks (as well as the task queue) for the given task type", hidden = true)
   public SuccessResponse deleteTasks(
       @ApiParam(value = "Task type", required = true) @PathParam("taskType") String taskType,
       @ApiParam(value = "Whether to force deleting the tasks (expert only option, enable with cautious")
@@ -762,7 +762,7 @@ public class PinotTaskRestletResource {
   @Authorize(targetType = TargetType.CLUSTER, action = Actions.Cluster.DELETE_TASK)
   @Produces(MediaType.APPLICATION_JSON)
   @Authenticate(AccessType.DELETE)
-  @ApiOperation("Delete a single task given its task name")
+  @ApiOperation(value = "Delete a single task given its task name", hidden = true)
   public SuccessResponse deleteTask(
       @ApiParam(value = "Task name", required = true) @PathParam("taskName") String taskName,
       @ApiParam(value = "Whether to force deleting the task (expert only option, enable with cautious")

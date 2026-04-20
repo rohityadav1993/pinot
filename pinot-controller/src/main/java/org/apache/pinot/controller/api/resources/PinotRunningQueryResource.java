@@ -110,7 +110,7 @@ public class PinotRunningQueryResource {
   @Produces(MediaType.APPLICATION_JSON)
   @ApiOperation(value = "Cancel a query as identified by the queryId", notes = "No effect if no query exists for the "
       + "given queryId on the requested broker. Query may continue to run for a short while after calling cancel as "
-      + "it's done in a non-blocking manner. The cancel method can be called multiple times.")
+      + "it's done in a non-blocking manner. The cancel method can be called multiple times.", hidden = true)
   @ApiResponses(value = {
       @ApiResponse(code = 200, message = "Success"), @ApiResponse(code = 500, message = "Internal server error"),
       @ApiResponse(code = 404, message = "Query not found on the requested broker")
@@ -171,7 +171,7 @@ public class PinotRunningQueryResource {
   @Produces(MediaType.APPLICATION_JSON)
   @ApiOperation(value = "Cancel a query as identified by the clientQueryId", notes = "No effect if no query exists for "
       + "the given clientQueryId on the requested broker. Query may continue to run for a short while after calling"
-      + "cancel as it's done in a non-blocking manner. The cancel method can be called multiple times.")
+      + "cancel as it's done in a non-blocking manner. The cancel method can be called multiple times.", hidden = true)
   @ApiResponses(value = {
       @ApiResponse(code = 200, message = "Success"), @ApiResponse(code = 500, message = "Internal server error"),
       @ApiResponse(code = 404, message = "Query not found on the requested broker")
@@ -234,7 +234,7 @@ public class PinotRunningQueryResource {
   @Produces(MediaType.APPLICATION_JSON)
   @ApiOperation(value = "Cancel a query as identified by the clientQueryId", notes = "No effect if no query exists for"
       + "the given clientQueryId on any broker. Query may continue to run for a short while after calling"
-      + "cancel as it's done in a non-blocking manner. The cancel method can be called multiple times.")
+      + "cancel as it's done in a non-blocking manner. The cancel method can be called multiple times.", hidden = true)
   @ApiResponses(value = {
       @ApiResponse(code = 200, message = "Success"), @ApiResponse(code = 500, message = "Internal server error"),
       @ApiResponse(code = 404, message = "Query not found on any broker")

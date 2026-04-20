@@ -344,7 +344,7 @@ public class PinotInstanceRestletResource {
   @Authenticate(AccessType.DELETE)
   @Consumes(MediaType.TEXT_PLAIN)
   @Produces(MediaType.APPLICATION_JSON)
-  @ApiOperation(value = "Drop an instance", notes = "Drop an instance")
+  @ApiOperation(value = "Drop an instance", notes = "Drop an instance", hidden = true)
   @ApiResponses(value = {
       @ApiResponse(code = 200, message = "Success"),
       @ApiResponse(code = 404, message = "Instance not found"),

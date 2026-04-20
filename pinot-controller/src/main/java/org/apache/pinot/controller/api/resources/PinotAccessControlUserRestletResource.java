@@ -165,7 +165,7 @@ public class PinotAccessControlUserRestletResource {
     @Authorize(targetType = TargetType.CLUSTER, action = Actions.Cluster.DELETE_USER)
     @Authenticate(AccessType.DELETE)
     @Produces(MediaType.APPLICATION_JSON)
-    @ApiOperation(value = "Delete a user", notes = "Delete a user")
+    @ApiOperation(value = "Delete a user", notes = "Delete a user", hidden = true)
     public SuccessResponse deleteUser(@PathParam("username") String username,
         @ApiParam(value = "CONTROLLER|SERVER|BROKER") @QueryParam("component") String componentTypeStr) {
 

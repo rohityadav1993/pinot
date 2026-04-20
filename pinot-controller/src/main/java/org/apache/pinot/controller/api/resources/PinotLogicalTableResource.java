@@ -203,7 +203,7 @@ public class PinotLogicalTableResource {
   @Path("/logicalTables/{tableName}")
   @Authorize(targetType = TargetType.TABLE, paramName = "tableName", action = Actions.Table.DELETE_TABLE)
   @Authenticate(AccessType.DELETE)
-  @ApiOperation(value = "Delete a logical table", notes = "Deletes a logical table by name")
+  @ApiOperation(value = "Delete a logical table", notes = "Deletes a logical table by name", hidden = true)
   @ApiResponses(value = {
       @ApiResponse(code = 200, message = "Successfully deleted logical table"), @ApiResponse(code = 404, message =
       "Logical table not found"), @ApiResponse(code = 500, message = "Error deleting logical table")

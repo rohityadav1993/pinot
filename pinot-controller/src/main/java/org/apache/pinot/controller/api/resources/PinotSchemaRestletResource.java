@@ -178,7 +178,7 @@ public class PinotSchemaRestletResource {
   @Path("/schemas/{schemaName}")
   @Authorize(targetType = TargetType.TABLE, paramName = "schemaName", action = Actions.Table.DELETE_SCHEMA)
   @Authenticate(AccessType.DELETE)
-  @ApiOperation(value = "Delete a schema", notes = "Deletes a schema by name")
+  @ApiOperation(value = "Delete a schema", notes = "Deletes a schema by name", hidden = true)
   @ApiResponses(value = {
       @ApiResponse(code = 200, message = "Successfully deleted schema"),
       @ApiResponse(code = 404, message = "Schema not found"),

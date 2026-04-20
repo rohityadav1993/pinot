@@ -273,7 +273,8 @@ public class PinotQueryWorkloadRestletResource {
   @Path("/queryWorkloadConfigs/{queryWorkloadName}")
   @Authorize(targetType = TargetType.CLUSTER, action = Actions.Cluster.DELETE_QUERY_WORKLOAD_CONFIG)
   @Authenticate(AccessType.DELETE)
-  @ApiOperation(value = "Delete query workload config", notes = "Delete workload config for the workload name")
+  @ApiOperation(value = "Delete query workload config", notes = "Delete workload config for the workload name",
+      hidden = true)
   public Response deleteQueryWorkloadConfig(@PathParam("queryWorkloadName") String queryWorkloadName,
       @Context HttpHeaders httpHeaders) {
     try {

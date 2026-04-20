@@ -382,7 +382,7 @@ public class PinotInstanceAssignmentRestletResource {
   @Path("/tables/{tableName}/instancePartitions")
   @Authorize(targetType = TargetType.TABLE, paramName = "tableName", action = Actions.Table.DELETE_INSTANCE_PARTITIONS)
   @Authenticate(AccessType.DELETE)
-  @ApiOperation(value = "Remove the instance partitions")
+  @ApiOperation(value = "Remove the instance partitions", hidden = true)
   public SuccessResponse removeInstancePartitions(
       @ApiParam(value = "Name of the table") @PathParam("tableName") String tableName,
       @ApiParam(value = "OFFLINE|CONSUMING|COMPLETED|tier name") @QueryParam("type") @Nullable

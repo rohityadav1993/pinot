@@ -777,7 +777,7 @@ public class PinotSegmentRestletResource {
   @Path("/segments/{tableName}/{segmentName}")
   @Authorize(targetType = TargetType.TABLE, paramName = "tableName", action = Actions.Table.DELETE_SEGMENT)
   @Authenticate(AccessType.DELETE)
-  @ApiOperation(value = "Delete a segment", notes = "Delete a segment")
+  @ApiOperation(value = "Delete a segment", notes = "Delete a segment", hidden = true)
   public SuccessResponse deleteSegment(
       @ApiParam(value = "Name of the table", required = true) @PathParam("tableName") String tableName,
       @ApiParam(value = "Name of the segment", required = true) @PathParam("segmentName") @Encoded String segmentName,
@@ -798,7 +798,7 @@ public class PinotSegmentRestletResource {
   @Authorize(targetType = TargetType.TABLE, paramName = "tableName", action = Actions.Table.DELETE_SEGMENT)
   @Authenticate(AccessType.DELETE)
   @ApiOperation(value = "Delete the list of segments provided in the queryParam else all segments",
-      notes = "Delete the list of segments provided in the queryParam else all segments")
+      notes = "Delete the list of segments provided in the queryParam else all segments", hidden = true)
   public SuccessResponse deleteMultipleSegments(
       @ApiParam(value = "Name of the table", required = true) @PathParam("tableName") String tableName,
       @ApiParam(value = "OFFLINE|REALTIME", required = true) @QueryParam("type") String tableTypeStr,
@@ -868,7 +868,7 @@ public class PinotSegmentRestletResource {
       + " list of segments which has not yet been replaced (determined by segment lineage entries) and can be queried"
       + " from the table. The value is false by default.",
       // TODO: more and more filters can be added later on, like excludeErrorSegments, excludeConsumingSegments, etc.
-      notes = "List all segments")
+      notes = "List all segments", hidden = true)
   public SuccessResponse deleteSegmentsWithTimeWindow(
       @ApiParam(value = "Name of the table", required = true) @PathParam("tableName") String tableName,
       @ApiParam(value = "OFFLINE|REALTIME") @QueryParam("type") String tableTypeStr,
@@ -1209,7 +1209,7 @@ public class PinotSegmentRestletResource {
           + "When force flag is true, it bypasses checks for pauseless being enabled and table being paused. "
           + "The retention period controls how long deleted segments are retained before permanent removal. "
           + "It follows this precedence: input parameter → table config → cluster setting → 7d default. "
-          + "Use 0d or -1d for immediate deletion without retention.")
+          + "Use 0d or -1d for immediate deletion without retention.", hidden = true)
   public String deleteSegmentsFromSequenceNum(
       @ApiParam(value = "Name of the table with type", required = true) @PathParam("tableNameWithType")
       String tableNameWithType,

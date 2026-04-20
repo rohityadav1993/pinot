@@ -420,7 +420,7 @@ public class PinotTableRestletResource {
   @Authorize(targetType = TargetType.TABLE, paramName = "tableName", action = Actions.Table.DELETE_TABLE)
   @Authenticate(AccessType.DELETE)
   @Produces(MediaType.APPLICATION_JSON)
-  @ApiOperation(value = "Deletes a table", notes = "Deletes a table")
+  @ApiOperation(value = "Deletes a table", notes = "Deletes a table", hidden = true)
   public SuccessResponse deleteTable(
       @ApiParam(value = "Name of the table to delete", required = true) @PathParam("tableName") String tableName,
       @ApiParam(value = "realtime|offline") @QueryParam("type") String tableTypeStr,
@@ -808,7 +808,7 @@ public class PinotTableRestletResource {
   @Path("/tables/{tableName}/rebalance")
   @Authorize(targetType = TargetType.TABLE, paramName = "tableName", action = Actions.Table.CANCEL_REBALANCE)
   @ApiOperation(value = "Cancel all rebalance jobs for the given table, and noop if no rebalance is running", notes =
-      "Cancel all rebalance jobs for the given table, and noop if no rebalance is running")
+      "Cancel all rebalance jobs for the given table, and noop if no rebalance is running", hidden = true)
   public List<String> cancelRebalance(
       @ApiParam(value = "Name of the table to rebalance", required = true) @PathParam("tableName") String tableName,
       @ApiParam(value = "OFFLINE|REALTIME", required = true) @QueryParam("type") String tableTypeStr,
@@ -1234,7 +1234,8 @@ public class PinotTableRestletResource {
   @Path("tables/{tableName}/timeBoundary")
   @Authenticate(AccessType.DELETE)
   @Authorize(targetType = TargetType.TABLE, paramName = "tableName", action = Actions.Table.DELETE_TIME_BOUNDARY)
-  @ApiOperation(value = "Delete hybrid table query time boundary", notes = "Delete hybrid table query time boundary")
+  @ApiOperation(value = "Delete hybrid table query time boundary", notes = "Delete hybrid table query time boundary",
+      hidden = true)
   @Produces(MediaType.APPLICATION_JSON)
   public SuccessResponse deleteTimeBoundary(
       @ApiParam(value = "Name of the hybrid table (without type suffix)", required = true) @PathParam("tableName")

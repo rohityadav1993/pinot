@@ -653,7 +653,7 @@ public class PinotTenantRestletResource {
   @Authorize(targetType = TargetType.CLUSTER, action = Actions.Cluster.DELETE_TENANT)
   @Authenticate(AccessType.DELETE)
   @Produces(MediaType.APPLICATION_JSON)
-  @ApiOperation(value = "Delete a tenant")
+  @ApiOperation(value = "Delete a tenant", hidden = true)
   @ApiResponses(value = {
       @ApiResponse(code = 200, message = "Success"),
       @ApiResponse(code = 400, message = "Tenant can not be deleted"),

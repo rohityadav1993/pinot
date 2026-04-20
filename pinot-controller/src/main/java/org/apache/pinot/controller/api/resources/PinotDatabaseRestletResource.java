@@ -94,7 +94,8 @@ public class PinotDatabaseRestletResource {
   @Path("/databases/{databaseName}")
   @Authenticate(AccessType.DELETE)
   @Authorize(targetType = TargetType.CLUSTER, action = Actions.Cluster.DELETE_DATABASE)
-  @ApiOperation(value = "Delete all tables in given database name", notes = "Delete all tables in given database name")
+  @ApiOperation(value = "Delete all tables in given database name", notes = "Delete all tables in given database name",
+      hidden = true)
   public DeleteDatabaseResponse deleteTablesInDatabase(
       @ApiParam(value = "Database name", required = true) @PathParam("databaseName") String databaseName,
       @ApiParam(value = "Run in dryRun mode initially to know the list of tables that will be deleted in actual run. "

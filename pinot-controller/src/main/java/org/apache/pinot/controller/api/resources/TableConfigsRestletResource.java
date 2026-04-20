@@ -280,7 +280,7 @@ public class TableConfigsRestletResource {
   @Authorize(targetType = TargetType.TABLE, paramName = "tableName", action = Actions.Table.DELETE_TABLE)
   @Authenticate(AccessType.DELETE)
   @Produces(MediaType.APPLICATION_JSON)
-  @ApiOperation(value = "Delete the TableConfigs", notes = "Delete the TableConfigs")
+  @ApiOperation(value = "Delete the TableConfigs", notes = "Delete the TableConfigs", hidden = true)
   public SuccessResponse deleteConfig(
       @ApiParam(value = "TableConfigs name i.e. raw table name", required = true) @PathParam("tableName")
       String tableName, @Context HttpHeaders headers) {

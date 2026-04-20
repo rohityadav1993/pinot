@@ -130,7 +130,7 @@ public class ZookeeperResource {
   @Authorize(targetType = TargetType.CLUSTER, action = Actions.Cluster.DELETE_ZNODE)
   @Authenticate(AccessType.DELETE)
   @Produces(MediaType.APPLICATION_JSON)
-  @ApiOperation(value = "Delete the znode at this path")
+  @ApiOperation(value = "Delete the znode at this path", hidden = true)
   @ApiResponses(value = {
       @ApiResponse(code = 200, message = "Success"),
       @ApiResponse(code = 404, message = "ZK Path not found"),
