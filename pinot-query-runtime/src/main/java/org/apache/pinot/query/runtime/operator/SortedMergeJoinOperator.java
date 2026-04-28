@@ -24,8 +24,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.function.Function;
-import java.util.stream.Stream;
 import javax.annotation.Nullable;
 import org.apache.calcite.rel.core.JoinRelType;
 import org.apache.pinot.calcite.rel.hint.PinotHintOptions;
@@ -40,6 +38,7 @@ import org.apache.pinot.query.planner.plannode.JoinNode;
 import org.apache.pinot.query.planner.plannode.PlanNode;
 import org.apache.pinot.query.runtime.blocks.MseBlock;
 import org.apache.pinot.query.runtime.blocks.RowHeapDataBlock;
+import org.apache.pinot.query.runtime.blocks.SuccessMseBlock;
 import org.apache.pinot.query.runtime.operator.BaseJoinOperator.StatKey;
 import org.apache.pinot.query.runtime.plan.OpChainExecutionContext;
 import org.apache.pinot.spi.utils.CommonConstants.MultiStageQueryRunner.JoinOverFlowMode;
@@ -73,6 +72,14 @@ public class SortedMergeJoinOperator extends MultiStageOperator {
   private final JoinOverFlowMode _joinOverflowMode;
   @Nullable
   private MseBlock.Eos _eos;
+
+  // Iterator state for streaming merge — initialized lazily on first getNextBlock() call
+  @Nullable private LazyBlockIterator _lazyLeftIter;
+  @Nullable private LazyBlockIterator _lazyRightIter;
+  @Nullable private Iterator<Object[]> _leftIter;
+  @Nullable private Iterator<Object[]> _rightIter;
+  @Nullable private Object[] _leftRow;
+  @Nullable private Object[] _rightRow;
 
   public SortedMergeJoinOperator(OpChainExecutionContext context, MultiStageOperator leftInput,
       MultiStageOperator rightInput, JoinNode node) {
@@ -113,6 +120,13 @@ public class SortedMergeJoinOperator extends MultiStageOperator {
     if (_eos != null) {
       return _eos;
     }
+    // Lazy init: create block-pull iterators on first call
+    if (_lazyLeftIter == null) {
+      _lazyLeftIter = new LazyBlockIterator(_leftInput);
+      _lazyRightIter = new LazyBlockIterator(_rightInput);
+      _leftIter = new DedupIterator(_leftKeySelector, _lazyLeftIter);
+      _rightIter = new DedupIterator(_rightKeySelector, _lazyRightIter);
+    }
     switch (_joinRelType) {
       case LEFT:
         return computeLeftJoin();
@@ -122,71 +136,64 @@ public class SortedMergeJoinOperator extends MultiStageOperator {
   }
 
   protected MseBlock computeLeftJoin() {
-    Function<MultiStageOperator, List<List<Object[]>>> fetchAllRows = (input) -> {
-      List<List<Object[]>> rows = new ArrayList<>();
-      MseBlock block = input.nextBlock();
-      while (block.isData()) {
-        rows.add((((MseBlock.Data) block).asRowHeap().getRows()));
-        block = input.nextBlock();
-      }
-      if (_eos == null && block.isEos()) {
-        _eos = (MseBlock.Eos) block;
-      }
-      return rows;
-    };
-    List<List<Object[]>> leftRows = fetchAllRows.apply(_leftInput);
-    List<List<Object[]>> rightRows = fetchAllRows.apply(_rightInput);
-    if (_eos != null && _eos.isError()) {
-      return _eos;
-    }
-    Stream<Object[]> leftStream = leftRows.stream().flatMap(List::stream);
-    Stream<Object[]> rightStream = rightRows.stream().flatMap(List::stream);
-    Iterator<Object[]> leftIterator = new DedupIterator(_leftKeySelector, leftStream.iterator());
-    Iterator<Object[]> rightIterator = new DedupIterator(_rightKeySelector, rightStream.iterator());
-    Object[] leftRow = null;
-    Object[] rightRow = null;
-    Comparable leftKey = null;
-    Comparable rightKey = null;
     List<Object[]> result = new ArrayList<>(10_000);
-    while (leftRow != null || leftIterator.hasNext()) {
-      leftRow = leftRow == null ? leftIterator.next() : leftRow;
-      rightRow = rightRow == null ? (rightIterator.hasNext() ? rightIterator.next() : null) : rightRow;
-      if (rightRow == null) {
+    while (_leftRow != null || _leftIter.hasNext()) {
+      if (_leftRow == null) {
+        _leftRow = _leftIter.next();
+      }
+      // Eagerly propagate right-side errors
+      if (_lazyRightIter.isError()) {
+        _eos = _lazyRightIter.getEos();
+        return _eos;
+      }
+      if (_rightRow == null) {
+        _rightRow = _rightIter.hasNext() ? _rightIter.next() : null;
+      }
+      if (_rightRow == null) {
+        // Right side exhausted — emit unmatched left row
         Object[] newRow = new Object[_resultColumnSize];
-        System.arraycopy(leftRow, 0, newRow, 0, _leftColumnSize);
+        System.arraycopy(_leftRow, 0, newRow, 0, _leftColumnSize);
         result.add(newRow);
-        leftRow = null;
+        _leftRow = null;
         continue;
       }
-      leftKey = (Comparable) _leftKeySelector.getKey(leftRow);
-      rightKey = (Comparable) _rightKeySelector.getKey(rightRow);
+      Comparable leftKey = (Comparable) _leftKeySelector.getKey(_leftRow);
+      Comparable rightKey = (Comparable) _rightKeySelector.getKey(_rightRow);
       if (isNullKey(leftKey)) {
-        leftRow = null;
+        _leftRow = null;
+        continue;
       }
       if (isNullKey(rightKey)) {
-        rightRow = null;
-      }
-      if (leftRow == null || rightRow == null) {
+        _rightRow = null;
         continue;
       }
       int c = leftKey.compareTo(rightKey);
       if (c == 0) {
         Object[] newRow = new Object[_resultColumnSize];
-        System.arraycopy(leftRow, 0, newRow, 0, _leftColumnSize);
-        System.arraycopy(rightRow, 0, newRow, _leftColumnSize, _resultColumnSize - _leftColumnSize);
+        System.arraycopy(_leftRow, 0, newRow, 0, _leftColumnSize);
+        System.arraycopy(_rightRow, 0, newRow, _leftColumnSize, _resultColumnSize - _leftColumnSize);
         result.add(newRow);
-        leftRow = null;
-        rightRow = null;
+        _leftRow = null;
+        _rightRow = null;
       } else if (c > 0) {
-        rightRow = null;
+        _rightRow = null;
       } else {
         Object[] newRow = new Object[_resultColumnSize];
-        System.arraycopy(leftRow, 0, newRow, 0, _leftColumnSize);
+        System.arraycopy(_leftRow, 0, newRow, 0, _leftColumnSize);
         result.add(newRow);
-        leftRow = null;
+        _leftRow = null;
       }
     }
-    // reaching here means that we have completed consumption on at least one side.
+    // Left exhausted — set EOS; prefer error EOS over success
+    MseBlock.Eos leftEos = _lazyLeftIter.getEos();
+    MseBlock.Eos rightEos = _lazyRightIter.getEos();
+    if (leftEos != null && leftEos.isError()) {
+      _eos = leftEos;
+    } else if (rightEos != null && rightEos.isError()) {
+      _eos = rightEos;
+    } else {
+      _eos = leftEos != null ? leftEos : SuccessMseBlock.INSTANCE;
+    }
     return new RowHeapDataBlock(result, _resultSchema);
   }
 
@@ -303,6 +310,55 @@ public class SortedMergeJoinOperator extends MultiStageOperator {
     void clear() {
       _row = null;
       _isSet = false;
+    }
+  }
+
+  /**
+   * Lazily fetches blocks from a {@link MultiStageOperator}, exposing them as a flat {@link Iterator}.
+   * Only one block is held in memory at a time; the next block is fetched when the current one is exhausted.
+   */
+  static class LazyBlockIterator implements Iterator<Object[]> {
+    private final MultiStageOperator _input;
+    private Iterator<Object[]> _current = java.util.Collections.emptyIterator();
+    private boolean _done = false;
+    @Nullable
+    private MseBlock.Eos _eos;
+
+    LazyBlockIterator(MultiStageOperator input) {
+      _input = input;
+    }
+
+    @Override
+    public boolean hasNext() {
+      while (!_current.hasNext() && !_done) {
+        MseBlock block;
+        try {
+          block = _input.nextBlock();
+        } catch (Exception e) {
+          throw new RuntimeException(e);
+        }
+        if (block.isData()) {
+          _current = ((MseBlock.Data) block).asRowHeap().getRows().iterator();
+        } else {
+          _eos = (MseBlock.Eos) block;
+          _done = true;
+        }
+      }
+      return _current.hasNext();
+    }
+
+    @Override
+    public Object[] next() {
+      return _current.next();
+    }
+
+    @Nullable
+    MseBlock.Eos getEos() {
+      return _eos;
+    }
+
+    boolean isError() {
+      return _eos != null && _eos.isError();
     }
   }
 }
