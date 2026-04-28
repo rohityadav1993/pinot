@@ -20,6 +20,7 @@ package org.apache.pinot.query.runtime.operator;
 
 import com.google.common.base.Preconditions;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -141,13 +142,13 @@ public class SortedMergeJoinOperator extends MultiStageOperator {
       if (_leftRow == null) {
         _leftRow = _leftIter.next();
       }
-      // Eagerly propagate right-side errors
+      if (_rightRow == null) {
+        _rightRow = _rightIter.hasNext() ? _rightIter.next() : null;
+      }
+      // Check for right-side errors after hasNext() which may have consumed an error block
       if (_lazyRightIter.isError()) {
         _eos = _lazyRightIter.getEos();
         return _eos;
-      }
-      if (_rightRow == null) {
-        _rightRow = _rightIter.hasNext() ? _rightIter.next() : null;
       }
       if (_rightRow == null) {
         // Right side exhausted — emit unmatched left row
@@ -319,7 +320,7 @@ public class SortedMergeJoinOperator extends MultiStageOperator {
    */
   static class LazyBlockIterator implements Iterator<Object[]> {
     private final MultiStageOperator _input;
-    private Iterator<Object[]> _current = java.util.Collections.emptyIterator();
+    private Iterator<Object[]> _current = Collections.emptyIterator();
     private boolean _done = false;
     @Nullable
     private MseBlock.Eos _eos;

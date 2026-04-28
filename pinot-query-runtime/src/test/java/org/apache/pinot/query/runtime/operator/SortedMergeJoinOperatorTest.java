@@ -27,6 +27,7 @@ import org.apache.pinot.query.planner.logical.RexExpression;
 import org.apache.pinot.query.planner.plannode.JoinNode;
 import org.apache.pinot.query.planner.plannode.PlanNode;
 import org.apache.pinot.query.routing.VirtualServerAddress;
+import org.apache.pinot.query.runtime.blocks.ErrorMseBlock;
 import org.apache.pinot.query.runtime.blocks.MseBlock;
 import org.mockito.Mock;
 import org.mockito.Mockito;
@@ -37,6 +38,7 @@ import org.testng.annotations.Test;
 import static org.mockito.Mockito.when;
 import static org.mockito.MockitoAnnotations.openMocks;
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertTrue;
 
 public class SortedMergeJoinOperatorTest {
   private AutoCloseable _mocks;
@@ -172,6 +174,35 @@ public class SortedMergeJoinOperatorTest {
 
     // Expected: Empty result since no left rows to preserve
     assertEquals(resultRows.size(), 0);
+  }
+
+  @Test
+  public void shouldPropagateRightSideError() {
+    _leftInput = new BlockListMultiStageOperator.Builder(DEFAULT_CHILD_SCHEMA)
+        .addRow(1, "Aa")
+        .addRow(2, "Bb")
+        .buildWithEos();
+
+    // Right side delivers one matching row then an error
+    _rightInput = new BlockListMultiStageOperator.Builder(DEFAULT_CHILD_SCHEMA)
+        .addRow(1, "Xx")
+        .buildWithError(ErrorMseBlock.fromException(new RuntimeException("right side error")));
+
+    DataSchema resultSchema = new DataSchema(
+        new String[]{"int_col1", "string_col1", "int_col2", "string_col2"},
+        new ColumnDataType[]{ColumnDataType.INT, ColumnDataType.STRING, ColumnDataType.INT, ColumnDataType.STRING});
+
+    SortedMergeJoinOperator operator = getOperator(resultSchema, JoinRelType.LEFT, List.of(0), List.of(0));
+    // Drain blocks until we get EOS
+    MseBlock block = operator.nextBlock();
+    MseBlock lastBlock = block;
+    while (block.isData()) {
+      lastBlock = block;
+      block = operator.nextBlock();
+    }
+    // The final block must be an error EOS, not a success EOS
+    assertTrue(block.isEos());
+    assertTrue(((MseBlock.Eos) block).isError());
   }
 
   @Test
