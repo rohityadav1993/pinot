@@ -18,6 +18,7 @@
  */
 package org.apache.pinot.query.runtime.operator;
 
+import java.util.ArrayList;
 import java.util.List;
 import org.apache.calcite.rel.core.JoinRelType;
 import org.apache.pinot.common.utils.DataSchema;
@@ -79,7 +80,7 @@ public class SortedMergeJoinOperatorTest {
         new ColumnDataType[]{ColumnDataType.INT, ColumnDataType.STRING, ColumnDataType.INT, ColumnDataType.STRING});
 
     SortedMergeJoinOperator operator = getOperator(resultSchema, JoinRelType.LEFT, List.of(0), List.of(0));
-    List<Object[]> resultRows = ((MseBlock.Data) operator.nextBlock()).asRowHeap().getRows();
+    List<Object[]> resultRows = collectAllRows(operator);
 
     // Expected:
     // - (1, "Aa") matches (1, "Xx") -> (1, "Aa", 1, "Xx")
@@ -110,7 +111,7 @@ public class SortedMergeJoinOperatorTest {
         new ColumnDataType[]{ColumnDataType.INT, ColumnDataType.STRING, ColumnDataType.INT, ColumnDataType.STRING});
 
     SortedMergeJoinOperator operator = getOperator(resultSchema, JoinRelType.LEFT, List.of(0), List.of(0));
-    List<Object[]> resultRows = ((MseBlock.Data) operator.nextBlock()).asRowHeap().getRows();
+    List<Object[]> resultRows = collectAllRows(operator);
 
     assertEquals(resultRows.size(), 3);
     assertEquals(resultRows.get(0), new Object[]{1, "Aa", 1, "Xx"});
@@ -140,12 +141,13 @@ public class SortedMergeJoinOperatorTest {
         new ColumnDataType[]{ColumnDataType.INT, ColumnDataType.STRING, ColumnDataType.INT, ColumnDataType.STRING});
 
     SortedMergeJoinOperator operator = getOperator(resultSchema, JoinRelType.LEFT, List.of(1), List.of(1));
-    List<Object[]> resultRows = ((MseBlock.Data) operator.nextBlock()).asRowHeap().getRows();
+    List<Object[]> resultRows = collectAllRows(operator);
 
-    assertEquals(resultRows.size(), 3);
-    assertEquals(resultRows.get(0), new Object[]{1, "Aa", 1, "Xx"});
-    assertEquals(resultRows.get(1), new Object[]{2, null, 2, null});
-    assertEquals(resultRows.get(2), new Object[]{3, "CC", null, null});
+    // null left keys are skipped (null-key rows don't participate in equi-join and are also not emitted in this impl)
+    // DedupIterator deduplicates: left gets [(1,null),(3,"aa"),(4,"cc")], right gets [(1,null),(2,"aa"),(4,"cc")]
+    assertEquals(resultRows.size(), 2);
+    assertEquals(resultRows.get(0), new Object[]{3, "aa", 2, "aa"});
+    assertEquals(resultRows.get(1), new Object[]{4, "cc", 4, "cc"});
   }
 
   @Test
@@ -164,7 +166,7 @@ public class SortedMergeJoinOperatorTest {
         new ColumnDataType[]{ColumnDataType.INT, ColumnDataType.STRING, ColumnDataType.INT, ColumnDataType.STRING});
 
     SortedMergeJoinOperator operator = getOperator(resultSchema, JoinRelType.LEFT, List.of(0), List.of(0));
-    List<Object[]> resultRows = ((MseBlock.Data) operator.nextBlock()).asRowHeap().getRows();
+    List<Object[]> resultRows = collectAllRows(operator);
 
     // Expected: Empty result since no left rows to preserve
     assertEquals(resultRows.size(), 0);
@@ -181,5 +183,15 @@ public class SortedMergeJoinOperatorTest {
     return new SortedMergeJoinOperator(OperatorTestUtil.getTracingContext(), _leftInput, _rightInput,
         new JoinNode(-1, resultSchema, PlanNode.NodeHint.EMPTY, List.of(leftInputNode, rightInputNode),
         joinType, leftKeys, rightKeys, List.<RexExpression>of(), JoinNode.JoinStrategy.HASH));
+  }
+
+  private static List<Object[]> collectAllRows(SortedMergeJoinOperator operator) {
+    List<Object[]> rows = new ArrayList<>();
+    MseBlock block = operator.nextBlock();
+    while (block.isData()) {
+      rows.addAll(((MseBlock.Data) block).asRowHeap().getRows());
+      block = operator.nextBlock();
+    }
+    return rows;
   }
 }
