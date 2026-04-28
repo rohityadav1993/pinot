@@ -143,8 +143,10 @@ public class SortedMergeJoinOperatorTest {
     SortedMergeJoinOperator operator = getOperator(resultSchema, JoinRelType.LEFT, List.of(1), List.of(1));
     List<Object[]> resultRows = collectAllRows(operator);
 
-    // null left keys are skipped (null-key rows don't participate in equi-join and are also not emitted in this impl)
-    // DedupIterator deduplicates: left gets [(1,null),(3,"aa"),(4,"cc")], right gets [(1,null),(2,"aa"),(4,"cc")]
+    // null left keys are skipped (known limitation — SQL LEFT JOIN would emit with null right cols)
+    // DedupIterator: left → [(1,null),(3,"aa"),(4,"cc")], right → [(1,null),(2,"aa"),(4,"cc")]
+    // null right key at (1,null) is also silently skipped (not emitted as unmatched left row)
+    // "aa" matches → emit [3,"aa",2,"aa"]; "cc" matches → emit [4,"cc",4,"cc"]
     assertEquals(resultRows.size(), 2);
     assertEquals(resultRows.get(0), new Object[]{3, "aa", 2, "aa"});
     assertEquals(resultRows.get(1), new Object[]{4, "cc", 4, "cc"});
@@ -170,6 +172,61 @@ public class SortedMergeJoinOperatorTest {
 
     // Expected: Empty result since no left rows to preserve
     assertEquals(resultRows.size(), 0);
+  }
+
+  @Test
+  public void shouldHandleMultiBlockLeftInput() {
+    // Left input split across two blocks
+    _leftInput = new BlockListMultiStageOperator.Builder(DEFAULT_CHILD_SCHEMA)
+        .addRow(1, "Aa")
+        .addRow(2, "Bb")
+        .finishBlock()
+        .addRow(4, "Dd")
+        .buildWithEos();
+
+    _rightInput = new BlockListMultiStageOperator.Builder(DEFAULT_CHILD_SCHEMA)
+        .addRow(1, "Xx")
+        .addRow(3, "Zz")
+        .buildWithEos();
+
+    DataSchema resultSchema = new DataSchema(
+        new String[]{"int_col1", "string_col1", "int_col2", "string_col2"},
+        new ColumnDataType[]{ColumnDataType.INT, ColumnDataType.STRING, ColumnDataType.INT, ColumnDataType.STRING});
+
+    SortedMergeJoinOperator operator = getOperator(resultSchema, JoinRelType.LEFT, List.of(0), List.of(0));
+    List<Object[]> resultRows = collectAllRows(operator);
+
+    assertEquals(resultRows.size(), 3);
+    assertEquals(resultRows.get(0), new Object[]{1, "Aa", 1, "Xx"});
+    assertEquals(resultRows.get(1), new Object[]{2, "Bb", null, null});
+    assertEquals(resultRows.get(2), new Object[]{4, "Dd", null, null});
+  }
+
+  @Test
+  public void shouldHandleMultiBlockRightInput() {
+    _leftInput = new BlockListMultiStageOperator.Builder(DEFAULT_CHILD_SCHEMA)
+        .addRow(2, "Bb")
+        .addRow(5, "Ee")
+        .buildWithEos();
+
+    // Right split across two blocks; key 3 is in block 2
+    _rightInput = new BlockListMultiStageOperator.Builder(DEFAULT_CHILD_SCHEMA)
+        .addRow(1, "Xx")
+        .addRow(2, "Yy")
+        .finishBlock()
+        .addRow(3, "Zz")
+        .buildWithEos();
+
+    DataSchema resultSchema = new DataSchema(
+        new String[]{"int_col1", "string_col1", "int_col2", "string_col2"},
+        new ColumnDataType[]{ColumnDataType.INT, ColumnDataType.STRING, ColumnDataType.INT, ColumnDataType.STRING});
+
+    SortedMergeJoinOperator operator = getOperator(resultSchema, JoinRelType.LEFT, List.of(0), List.of(0));
+    List<Object[]> resultRows = collectAllRows(operator);
+
+    assertEquals(resultRows.size(), 2);
+    assertEquals(resultRows.get(0), new Object[]{2, "Bb", 2, "Yy"});
+    assertEquals(resultRows.get(1), new Object[]{5, "Ee", null, null});
   }
 
   private SortedMergeJoinOperator getOperator(DataSchema resultSchema, JoinRelType joinType,
