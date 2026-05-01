@@ -24,7 +24,7 @@
   <parent>
     <groupId>org.apache.pinot</groupId>
     <artifactId>pinot-plugins</artifactId>
-    <version>1.4.7-sortedjoin</version>
+    <version>1.4.8-sortedjoin-SNAPSHOT</version>
   </parent>
 
   <artifactId>pinot-timeseries-lang</artifactId>
