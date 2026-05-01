@@ -24,7 +24,7 @@
   <parent>
     <artifactId>pinot</artifactId>
     <groupId>org.apache.pinot</groupId>
-    <version>1.4.7-sortedjoin-SNAPSHOT</version>
+    <version>1.4.7-sortedjoin</version>
   </parent>
   <artifactId>pinot-controller</artifactId>
   <name>Pinot Controller</name>
