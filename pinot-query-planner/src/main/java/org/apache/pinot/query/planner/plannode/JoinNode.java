@@ -80,7 +80,14 @@ public class JoinNode extends BasePlanNode {
 
   @Override
   public String explain() {
-    return _joinStrategy == JoinStrategy.ASOF ? "ASOF JOIN" : "JOIN";
+    switch (_joinStrategy) {
+      case ASOF:
+        return "ASOF JOIN";
+      case SORTED:
+        return "SORTED MERGE JOIN";
+      default:
+        return "JOIN";
+    }
   }
 
   @Override
@@ -118,6 +125,6 @@ public class JoinNode extends BasePlanNode {
   }
 
   public enum JoinStrategy {
-    HASH, LOOKUP, ASOF
+    HASH, LOOKUP, ASOF, SORTED
   }
 }

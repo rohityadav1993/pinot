@@ -19,13 +19,17 @@
 package org.apache.pinot.calcite.rel.rules;
 
 import com.google.common.base.Preconditions;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import javax.annotation.Nullable;
 import org.apache.calcite.plan.RelOptRule;
 import org.apache.calcite.plan.RelOptRuleCall;
+import org.apache.calcite.rel.RelCollation;
+import org.apache.calcite.rel.RelCollations;
 import org.apache.calcite.rel.RelDistributions;
+import org.apache.calcite.rel.RelFieldCollation;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.core.Join;
 import org.apache.calcite.rel.core.JoinInfo;
@@ -34,6 +38,7 @@ import org.apache.calcite.rel.logical.LogicalAsofJoin;
 import org.apache.calcite.tools.RelBuilderFactory;
 import org.apache.pinot.calcite.rel.hint.PinotHintOptions;
 import org.apache.pinot.calcite.rel.logical.PinotLogicalExchange;
+import org.apache.pinot.calcite.rel.logical.PinotLogicalSortExchange;
 
 
 /**
@@ -80,6 +85,13 @@ public class PinotJoinExchangeNodeInsertRule extends RelOptRule {
       Preconditions.checkArgument(rightDistributionType == null,
           "Right distribution type hint is not supported for lookup join");
       newRight = right;
+    } else if (PinotHintOptions.JoinHintOptions.useSortedMergeJoinStrategy(join)) {
+      // Streaming sorted merge join: hash-partition both inputs on the join keys and sort them (on the receiver) so
+      // that each input arrives at the join sorted in ascending join-key order. This lets the
+      // SortedMergeJoinOperator advance both inputs with a two-pointer merge instead of building a hash table.
+      Preconditions.checkArgument(!joinInfo.leftKeys.isEmpty(), "Sorted merge join requires equi-join keys");
+      newLeft = createSortExchangeForMergeJoin(joinInfo.leftKeys, left);
+      newRight = createSortExchangeForMergeJoin(joinInfo.rightKeys, right);
     } else if (joinInfo.leftKeys.isEmpty() && join.getJoinType() == JoinRelType.FULL
         && leftDistributionType == null && rightDistributionType == null) {
       // FULL OUTER JOIN with no equi keys: use hash with empty key to explicitly route all data to one destination.
@@ -111,6 +123,20 @@ public class PinotJoinExchangeNodeInsertRule extends RelOptRule {
       call.transformTo(join.copy(join.getTraitSet(), join.getCondition(), newLeft, newRight, join.getJoinType(),
           join.isSemiJoinDone()));
     }
+  }
+
+  /**
+   * Creates a hash-distributed, sorted exchange for a sorted merge join input. Rows are hash-partitioned on the join
+   * keys (so that matching keys land on the same worker) and sorted in ascending join-key order on the receiver.
+   */
+  private static PinotLogicalSortExchange createSortExchangeForMergeJoin(List<Integer> keys, RelNode child) {
+    Preconditions.checkArgument(!keys.isEmpty(), "Sorted merge join requires join keys");
+    List<RelFieldCollation> fieldCollations = new ArrayList<>(keys.size());
+    for (int key : keys) {
+      fieldCollations.add(new RelFieldCollation(key, RelFieldCollation.Direction.ASCENDING));
+    }
+    RelCollation collation = RelCollations.of(fieldCollations);
+    return PinotLogicalSortExchange.create(child, RelDistributions.hash(keys), collation, false, true);
   }
 
   private static PinotLogicalExchange createExchangeForLookupJoin(PinotHintOptions.DistributionType distributionType,
