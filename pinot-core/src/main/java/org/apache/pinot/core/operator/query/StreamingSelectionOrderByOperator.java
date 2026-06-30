@@ -109,6 +109,9 @@ public class StreamingSelectionOrderByOperator extends BaseOperator<SelectionRes
   private final Comparator<Object[]> _comparator;
   // Compares only the first order-by column; used to detect primary-value run boundaries
   private final Comparator<Object[]> _primaryComparator;
+  // Pre-allocated run heap (cleared and reused each nextRun() call to avoid per-run allocation)
+  private final Comparator<Object[]> _reversedComparator;
+  private final PriorityQueue<Object[]> _runHeap;
 
   // Pre-computed invariants for the two-phase fetch (null when single-phase)
   private final List<ExpressionContext> _nonOrderByExpressions;
@@ -161,6 +164,9 @@ public class StreamingSelectionOrderByOperator extends BaseOperator<SelectionRes
     // only index 0 is enough to detect when one primary-value run ends and the next begins.
     _primaryComparator =
         OrderByComparatorFactory.getComparator(_orderByExpressions, _orderByColumnContexts, _nullHandlingEnabled, 0, 1);
+    _reversedComparator = _comparator.reversed();
+    _runHeap = new PriorityQueue<>(
+        Math.min(_numRowsToKeep, SelectionOperatorUtils.MAX_ROW_HOLDER_INITIAL_CAPACITY), _reversedComparator);
 
     if (_twoPhase) {
       _phase1Expressions = new ArrayList<>(_numOrderByExpressions);
@@ -263,9 +269,8 @@ public class StreamingSelectionOrderByOperator extends BaseOperator<SelectionRes
         return null;
       }
     }
-    PriorityQueue<Object[]> runHeap =
-        new PriorityQueue<>(Math.min(_numRowsToKeep, SelectionOperatorUtils.MAX_ROW_HOLDER_INITIAL_CAPACITY),
-            _comparator.reversed());
+    PriorityQueue<Object[]> runHeap = _runHeap;
+    runHeap.clear();
     Object[] runFirstRow = _pendingRow;
     SelectionOperatorUtils.addToPriorityQueue(_pendingRow, runHeap, _numRowsToKeep);
     _pendingRow = null;

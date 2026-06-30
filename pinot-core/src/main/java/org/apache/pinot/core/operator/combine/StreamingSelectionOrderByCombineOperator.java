@@ -206,6 +206,7 @@ public class StreamingSelectionOrderByCombineOperator extends BaseStreamingCombi
   /// acquired (idempotent) so an early stop by the driver cannot leak acquires.
   @Override
   public void stop() {
+    _done = true;
     releaseAllCursors();
   }
 
@@ -254,6 +255,7 @@ public class StreamingSelectionOrderByCombineOperator extends BaseStreamingCombi
       return attachExecutionStats(
           new SelectionResultsBlock(resolveDataSchema(), Collections.emptyList(), _comparator, _queryContext));
     } catch (Exception e) {
+      _done = true;
       releaseAllCursors();
       return createExceptionResultsBlockAndAttachExecutionStats(e, "merging sorted selection results");
     }
