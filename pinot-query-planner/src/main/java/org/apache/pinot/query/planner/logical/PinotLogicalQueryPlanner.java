@@ -61,10 +61,11 @@ public class PinotLogicalQueryPlanner {
    */
   public static SubPlan makePlan(RelRoot relRoot,
       @Nullable TransformationTracker.Builder<PlanNode, RelNode> tracker, boolean useSpools,
-      String hashFunction) {
+      String hashFunction, boolean streamingSelectionOrderBy) {
     PlanNode rootNode = new RelToPlanNodeConverter(tracker, hashFunction).toPlanNode(relRoot.rel);
 
-    PlanFragment rootFragment = planNodeToPlanFragment(rootNode, tracker, useSpools, hashFunction);
+    PlanFragment rootFragment =
+        planNodeToPlanFragment(rootNode, tracker, useSpools, hashFunction, streamingSelectionOrderBy);
     return new SubPlan(rootFragment,
         new SubPlanMetadata(RelToPlanNodeConverter.getTableNamesFromRelRoot(relRoot.rel), relRoot.fields), List.of());
 
@@ -110,8 +111,8 @@ public class PinotLogicalQueryPlanner {
 
   private static PlanFragment planNodeToPlanFragment(
       PlanNode node, @Nullable TransformationTracker.Builder<PlanNode, RelNode> tracker, boolean useSpools,
-      String hashFunction) {
-    PlanFragmenter fragmenter = new PlanFragmenter();
+      String hashFunction, boolean streamingSelectionOrderBy) {
+    PlanFragmenter fragmenter = new PlanFragmenter(streamingSelectionOrderBy);
     PlanFragmenter.Context fragmenterContext = fragmenter.createContext();
     node = node.visit(fragmenter, fragmenterContext);
 

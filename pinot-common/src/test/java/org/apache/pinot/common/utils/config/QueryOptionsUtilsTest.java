@@ -38,7 +38,8 @@ import static org.testng.Assert.fail;
 public class QueryOptionsUtilsTest {
   private static final List<String> POSITIVE_INT_KEYS =
       List.of(NUM_REPLICA_GROUPS_TO_QUERY, MAX_EXECUTION_THREADS, NUM_GROUPS_LIMIT, MAX_INITIAL_RESULT_HOLDER_CAPACITY,
-          MAX_STREAMING_PENDING_BLOCKS, MAX_ROWS_IN_JOIN, MAX_ROWS_IN_WINDOW, STREAMING_SELECTION_ORDER_BY_BLOCK_SIZE);
+          MAX_STREAMING_PENDING_BLOCKS, MAX_ROWS_IN_JOIN, MAX_ROWS_IN_WINDOW, STREAMING_SELECTION_ORDER_BY_BLOCK_SIZE,
+          STREAMING_SORTED_MAILBOX_RECEIVE_BLOCK_SIZE);
   private static final List<String> NON_NEGATIVE_INT_KEYS = List.of(MULTI_STAGE_LEAF_LIMIT);
   private static final List<String> UNBOUNDED_INT_KEYS =
       List.of(MIN_SEGMENT_GROUP_TRIM_SIZE, MIN_SERVER_GROUP_TRIM_SIZE, MIN_BROKER_GROUP_TRIM_SIZE,
@@ -303,6 +304,22 @@ public class QueryOptionsUtilsTest {
     }
   }
 
+  @Test
+  public void testStreamingSortedMailboxReceiveTriState() {
+    // Tri-state opt-in: unset -> null (follow planner flag), "true" -> TRUE, "false" -> FALSE.
+    assertNull(QueryOptionsUtils.getStreamingSortedMailboxReceive(Map.of()));
+    assertNull(QueryOptionsUtils.getStreamingSortedMailboxReceive(new HashMap<>()));
+    assertEquals(QueryOptionsUtils.getStreamingSortedMailboxReceive(
+        Map.of(STREAMING_SORTED_MAILBOX_RECEIVE, "true")), Boolean.TRUE);
+    assertEquals(QueryOptionsUtils.getStreamingSortedMailboxReceive(
+        Map.of(STREAMING_SORTED_MAILBOX_RECEIVE, "TRUE")), Boolean.TRUE);
+    assertEquals(QueryOptionsUtils.getStreamingSortedMailboxReceive(
+        Map.of(STREAMING_SORTED_MAILBOX_RECEIVE, "false")), Boolean.FALSE);
+    // Any non-"true" value parses to FALSE (Boolean.parseBoolean semantics), distinct from unset null.
+    assertEquals(QueryOptionsUtils.getStreamingSortedMailboxReceive(
+        Map.of(STREAMING_SORTED_MAILBOX_RECEIVE, "1")), Boolean.FALSE);
+  }
+
   private static Object getValue(Map<String, String> map, String key) {
     switch (key) {
       // Positive ints
@@ -322,6 +339,8 @@ public class QueryOptionsUtilsTest {
         return QueryOptionsUtils.getMaxRowsInWindow(map);
       case STREAMING_SELECTION_ORDER_BY_BLOCK_SIZE:
         return QueryOptionsUtils.getStreamingSelectionOrderByBlockSize(map);
+      case STREAMING_SORTED_MAILBOX_RECEIVE_BLOCK_SIZE:
+        return QueryOptionsUtils.getStreamingSortedMailboxReceiveBlockSize(map);
       // Non-negative ints
       case MULTI_STAGE_LEAF_LIMIT:
         return QueryOptionsUtils.getMultiStageLeafLimit(map);

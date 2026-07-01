@@ -24,7 +24,9 @@ import it.unimi.dsi.fastutil.ints.IntList;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.List;
+import javax.annotation.Nullable;
 import org.apache.calcite.rel.RelDistribution;
+import org.apache.calcite.rel.RelFieldCollation;
 import org.apache.pinot.calcite.rel.logical.PinotRelExchangeType;
 import org.apache.pinot.query.planner.PlanFragment;
 import org.apache.pinot.query.planner.SubPlan;
@@ -69,6 +71,19 @@ public class PlanFragmenter implements PlanNodeVisitor<PlanNode, PlanFragmenter.
 
   // ROOT PlanFragment ID is 0, current PlanFragment ID starts with 1, next PlanFragment ID starts with 2.
   private int _nextPlanFragmentId = 2;
+
+  // When true (step-1 hint streamingSelectionOrderBy enabled), the fragmenter may mark a MailboxReceiveNode as
+  // sorted-on-sender for a validated leaf selection ORDER BY sender fragment, enabling the k-way merge in
+  // SortedMailboxReceiveOperator.
+  private final boolean _streamingSelectionOrderBy;
+
+  public PlanFragmenter() {
+    this(false);
+  }
+
+  public PlanFragmenter(boolean streamingSelectionOrderBy) {
+    _streamingSelectionOrderBy = streamingSelectionOrderBy;
+  }
 
   public Context createContext() {
     // ROOT PlanFragment ID is 0, current PlanFragment ID starts with 1.
@@ -199,10 +214,17 @@ public class PlanFragmenter implements PlanNodeVisitor<PlanNode, PlanFragmenter.
     _mailboxSendToExchangeNodeMap.put(mailboxSendNode, node);
 
     // Return the MailboxReceiveNode as the leave node of the current PlanFragment.
+    // When the streamingSelectionOrderBy hint is on and the sender fragment is a validated leaf selection ORDER BY
+    // whose collation matches the exchange collation, mark the receive as sorted-on-sender so that
+    // SortedMailboxReceiveOperator can perform a k-way merge. When the hint is off, the flag is unchanged
+    // (equal to the existing rel value node.isSortOnSender()).
+    boolean sortedOnSender = node.isSortOnSender()
+        || (_streamingSelectionOrderBy && isLeafSelectionOrderBy(nextPlanFragmentRoot)
+            && collationsMatch(((SortNode) nextPlanFragmentRoot).getCollations(), node.getCollations()));
     MailboxReceiveNode mailboxReceiveNode =
         new MailboxReceiveNode(receiverPlanFragmentId, nextPlanFragmentRoot.getDataSchema(),
             senderPlanFragmentId, exchangeType, distributionType, keys, node.getCollations(), node.isSortOnReceiver(),
-            node.isSortOnSender(), mailboxSendNode);
+            sortedOnSender, mailboxSendNode);
     _mailboxReceiveToExchangeNodeMap.put(mailboxReceiveNode, node);
     return mailboxReceiveNode;
   }
@@ -227,6 +249,56 @@ public class PlanFragmenter implements PlanNodeVisitor<PlanNode, PlanFragmenter.
 
   private boolean isPlanFragmentSplitter(PlanNode node) {
     return ((ExchangeNode) node).getExchangeType() != PinotRelExchangeType.SUB_PLAN;
+  }
+
+  /**
+   * Returns {@code true} if the given sender fragment root represents a <i>leaf selection ORDER BY</i> over a single
+   * table, i.e. a {@link SortNode} whose single-input chain down to the leaf consists solely of {@link ProjectNode}
+   * and {@link TableScanNode} nodes and bottoms out at a {@link TableScanNode}.
+   *
+   * <p>Any branching node (input count != 1 that is not the leaf scan) or any node that breaks the single-table leaf
+   * shape (Join, Aggregate, MailboxReceive/Exchange, Window, SetOp, etc.) makes this return {@code false}. This is the
+   * shape for which the k-way merge in {@code SortedMailboxReceiveOperator} can be safely auto-activated.
+   */
+  private static boolean isLeafSelectionOrderBy(PlanNode root) {
+    if (!(root instanceof SortNode)) {
+      return false;
+    }
+    PlanNode current = root;
+    while (true) {
+      if (current instanceof TableScanNode) {
+        return true;
+      }
+      // Only SortNode (root), ProjectNode and TableScanNode are allowed in the chain.
+      if (!(current instanceof SortNode) && !(current instanceof ProjectNode)) {
+        return false;
+      }
+      List<PlanNode> inputs = current.getInputs();
+      if (inputs.size() != 1) {
+        return false;
+      }
+      current = inputs.get(0);
+    }
+  }
+
+  /**
+   * Returns {@code true} if the two collation lists are equivalent for sorted-merge purposes: same size and, for each
+   * position, equal field index and equal direction (and equal null direction). A {@code null} list (e.g. a plain,
+   * non-sorted exchange) is treated as "not a sorted collation" and yields {@code false}.
+   */
+  private static boolean collationsMatch(@Nullable List<RelFieldCollation> a, @Nullable List<RelFieldCollation> b) {
+    if (a == null || b == null || a.size() != b.size()) {
+      return false;
+    }
+    for (int i = 0; i < a.size(); i++) {
+      RelFieldCollation ca = a.get(i);
+      RelFieldCollation cb = b.get(i);
+      if (ca.getFieldIndex() != cb.getFieldIndex() || ca.getDirection() != cb.getDirection()
+          || ca.nullDirection != cb.nullDirection) {
+        return false;
+      }
+    }
+    return true;
   }
 
   public static class Context {

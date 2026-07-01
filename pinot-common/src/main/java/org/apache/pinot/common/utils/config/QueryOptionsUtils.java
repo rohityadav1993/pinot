@@ -398,6 +398,18 @@ public class QueryOptionsUtils {
     return checkedParseIntPositive(QueryOptionKey.STREAMING_SELECTION_ORDER_BY_BLOCK_SIZE, value);
   }
 
+  @Nullable
+  public static Boolean getStreamingSortedMailboxReceive(Map<String, String> queryOptions) {
+    String value = queryOptions.get(QueryOptionKey.STREAMING_SORTED_MAILBOX_RECEIVE);
+    return value != null ? Boolean.parseBoolean(value) : null;
+  }
+
+  @Nullable
+  public static Integer getStreamingSortedMailboxReceiveBlockSize(Map<String, String> queryOptions) {
+    String value = queryOptions.get(QueryOptionKey.STREAMING_SORTED_MAILBOX_RECEIVE_BLOCK_SIZE);
+    return checkedParseIntPositive(QueryOptionKey.STREAMING_SORTED_MAILBOX_RECEIVE_BLOCK_SIZE, value);
+  }
+
   public static boolean isNullHandlingEnabled(Map<String, String> queryOptions) {
     return Boolean.parseBoolean(queryOptions.get(QueryOptionKey.ENABLE_NULL_HANDLING));
   }

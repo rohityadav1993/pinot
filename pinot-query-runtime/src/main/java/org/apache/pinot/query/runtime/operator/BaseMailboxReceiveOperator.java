@@ -122,6 +122,16 @@ public abstract class BaseMailboxReceiveOperator extends MultiStageOperator {
     return _multiConsumer.calculateStats();
   }
 
+  /**
+   * Returns one per-sender {@link BlockingMultiStreamConsumer.StreamHandle} so a subclass can read each sender mailbox
+   * independently (used by the streaming k-way merge). Latches the underlying consumer into per-stream mode: a subclass
+   * must use either these handles or {@code readMseBlockBlocking()}, never both. Returns an empty list when there are
+   * no mailboxes.
+   */
+  protected List<BlockingMultiStreamConsumer.StreamHandle<ReceivingMailbox.MseBlockWithStats>> streamHandles() {
+    return _multiConsumer.streamHandles();
+  }
+
   @Override
   public StatMap<StatKey> copyStatMaps() {
     return new StatMap<>(_statMap);

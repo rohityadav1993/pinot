@@ -792,6 +792,16 @@ public class CommonConstants {
         /// Output block size (rows) for the streaming selection ORDER BY combine; defaults to 10000.
         public static final String STREAMING_SELECTION_ORDER_BY_BLOCK_SIZE = "streamingSelectionOrderByBlockSize";
 
+        /// Tri-state opt-in for the streaming k-way merge in SortedMailboxReceiveOperator. true = use k-way merge
+        /// when the planner has also proven senders are sorted (isSortedOnSender); unset or false = always
+        /// accumulate-then-sort.
+        /// Note: like SQL ORDER BY, the order among rows with equal collation keys is unspecified and may differ
+        /// between the merge path and the accumulate-then-sort path; the output row multiset is identical.
+        public static final String STREAMING_SORTED_MAILBOX_RECEIVE = "streamingSortedMailboxReceive";
+        /// Output block size (rows) for the streaming sorted mailbox-receive k-way merge; defaults to 10000.
+        public static final String STREAMING_SORTED_MAILBOX_RECEIVE_BLOCK_SIZE =
+            "streamingSortedMailboxReceiveBlockSize";
+
         public static final String NUM_REPLICA_GROUPS_TO_QUERY = "numReplicaGroupsToQuery";
         public static final String ORDERED_PREFERRED_POOLS = "orderedPreferredPools";
         public static final String USE_FIXED_REPLICA = "useFixedReplica";
