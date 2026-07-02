@@ -447,6 +447,59 @@ public class SortedMergeJoinOperatorTest {
   }
 
   @Test
+  public void shouldHandleLeftJoinManyToMany() {
+    // LEFT JOIN with multiple left rows and multiple right rows sharing the same key, plus an additional key
+    // to verify correct cursor advancement after the many-to-many group.
+    MultiStageOperator left = new BlockListMultiStageOperator.Builder(CHILD_SCHEMA)
+        .addRow(1, "k")
+        .addRow(2, "k")
+        .addRow(3, "m")
+        .buildWithEos();
+    MultiStageOperator right = new BlockListMultiStageOperator.Builder(CHILD_SCHEMA)
+        .addRow(10, "k")
+        .addRow(20, "k")
+        .addRow(30, "m")
+        .buildWithEos();
+    SortedMergeJoinOperator operator =
+        getOperator(left, right, RESULT_SCHEMA, JoinRelType.LEFT, List.of(1), List.of(1));
+    List<Object[]> rows = drain(operator);
+    // 2 left x 2 right for "k" = 4 rows, plus 1 left x 1 right for "m" = 1 row => 5 total
+    assertEquals(rows.size(), 5);
+    assertEquals(rows.get(0), new Object[]{1, "k", 10, "k"});
+    assertEquals(rows.get(1), new Object[]{1, "k", 20, "k"});
+    assertEquals(rows.get(2), new Object[]{2, "k", 10, "k"});
+    assertEquals(rows.get(3), new Object[]{2, "k", 20, "k"});
+    assertEquals(rows.get(4), new Object[]{3, "m", 30, "m"});
+  }
+
+  @Test
+  public void shouldHandleLeftJoinManyToManyAcrossBlocks() {
+    // LEFT JOIN where left rows sharing a key span across block boundaries, and the right run also spans blocks.
+    MultiStageOperator left = new BlockListMultiStageOperator.Builder(CHILD_SCHEMA)
+        .addRow(1, "k")
+        .finishBlock()
+        .addRow(2, "k")
+        .addRow(3, "m")
+        .buildWithEos();
+    MultiStageOperator right = new BlockListMultiStageOperator.Builder(CHILD_SCHEMA)
+        .addRow(10, "k")
+        .finishBlock()
+        .addRow(20, "k")
+        .addRow(30, "m")
+        .buildWithEos();
+    SortedMergeJoinOperator operator =
+        getOperator(left, right, RESULT_SCHEMA, JoinRelType.LEFT, List.of(1), List.of(1));
+    List<Object[]> rows = drain(operator);
+    // 2 left x 2 right for "k" = 4 rows, plus 1 left x 1 right for "m" = 1 row => 5 total
+    assertEquals(rows.size(), 5);
+    assertEquals(rows.get(0), new Object[]{1, "k", 10, "k"});
+    assertEquals(rows.get(1), new Object[]{1, "k", 20, "k"});
+    assertEquals(rows.get(2), new Object[]{2, "k", 10, "k"});
+    assertEquals(rows.get(3), new Object[]{2, "k", 20, "k"});
+    assertEquals(rows.get(4), new Object[]{3, "m", 30, "m"});
+  }
+
+  @Test
   public void shouldApplyNonEquiCondition() {
     // Both sides share key=1 with different string values; the non-equi condition filters some matches.
     MultiStageOperator left = new BlockListMultiStageOperator.Builder(CHILD_SCHEMA)
