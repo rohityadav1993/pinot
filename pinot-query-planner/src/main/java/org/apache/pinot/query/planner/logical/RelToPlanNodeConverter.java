@@ -774,6 +774,11 @@ public final class RelToPlanNodeConverter {
       Preconditions.checkState(projectInput instanceof TableScan,
           "Right input for lookup join must be a Project over TableScan, got Project over: %s",
           projectInput.getClass().getSimpleName());
+    } else if (PinotHintOptions.JoinHintOptions.useSortedMergeJoinStrategy(join)) {
+      Preconditions.checkArgument(!joinInfo.leftKeys.isEmpty(), "Sorted merge join requires equi-join keys");
+      Preconditions.checkArgument(joinType == JoinRelType.INNER || joinType == JoinRelType.LEFT,
+          "Sorted merge join only supports INNER and LEFT joins, got: %s", joinType);
+      joinStrategy = JoinNode.JoinStrategy.SORTED;
     } else {
       // TODO: Consider adding DYNAMIC_BROADCAST as a separate join strategy
       joinStrategy = JoinNode.JoinStrategy.HASH;
@@ -830,6 +835,11 @@ public final class RelToPlanNodeConverter {
       Preconditions.checkState(projectInput instanceof TableScan,
           "Right input for lookup join must be a Project over TableScan, got Project over: %s",
           projectInput.getClass().getSimpleName());
+    } else if (PinotHintOptions.JoinHintOptions.useSortedMergeJoinStrategy(rel)) {
+      Preconditions.checkArgument(!joinInfo.leftKeys.isEmpty(), "Sorted merge join requires equi-join keys");
+      Preconditions.checkArgument(joinType == JoinRelType.INNER || joinType == JoinRelType.LEFT,
+          "Sorted merge join only supports INNER and LEFT joins, got: %s", joinType);
+      joinStrategy = JoinNode.JoinStrategy.SORTED;
     } else {
       // TODO: Consider adding DYNAMIC_BROADCAST as a separate join strategy
       joinStrategy = JoinNode.JoinStrategy.HASH;

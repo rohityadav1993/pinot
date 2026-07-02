@@ -48,9 +48,13 @@ import org.apache.pinot.query.planner.plannode.TableScanNode;
 import org.apache.pinot.query.planner.plannode.UnnestNode;
 import org.apache.pinot.query.planner.plannode.ValueNode;
 import org.apache.pinot.query.planner.plannode.WindowNode;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 
 public class PlanNodeDeserializer {
+  private static final Logger LOGGER = LoggerFactory.getLogger(PlanNodeDeserializer.class);
+
   private PlanNodeDeserializer() {
   }
 
@@ -378,8 +382,12 @@ public class PlanNodeDeserializer {
         return JoinNode.JoinStrategy.LOOKUP;
       case AS_OF:
         return JoinNode.JoinStrategy.ASOF;
+      case SORTED:
+        return JoinNode.JoinStrategy.SORTED;
       default:
-        throw new IllegalStateException("Unsupported JoinStrategy: " + joinStrategy);
+        LOGGER.warn("Unknown JoinStrategy '{}' encountered (possible rolling-upgrade); falling back to HASH",
+            joinStrategy);
+        return JoinNode.JoinStrategy.HASH;
     }
   }
 
