@@ -35,6 +35,7 @@ import org.apache.calcite.rel.core.Join;
 import org.apache.calcite.rel.core.JoinInfo;
 import org.apache.calcite.rel.core.JoinRelType;
 import org.apache.calcite.rel.logical.LogicalAsofJoin;
+import org.apache.calcite.rel.logical.LogicalSort;
 import org.apache.calcite.tools.RelBuilderFactory;
 import org.apache.pinot.calcite.rel.hint.PinotHintOptions;
 import org.apache.pinot.calcite.rel.logical.PinotLogicalExchange;
@@ -193,6 +194,7 @@ public class PinotJoinExchangeNodeInsertRule extends RelOptRule {
           RelFieldCollation.NullDirection.LAST));
     }
     RelCollation collation = RelCollations.of(fieldCollations);
-    return PinotLogicalSortExchange.create(input, RelDistributions.hash(joinKeys), collation, true, false);
+    RelNode sortedInput = LogicalSort.create(input, collation, null, null);
+    return PinotLogicalSortExchange.create(sortedInput, RelDistributions.hash(joinKeys), collation, true, false);
   }
 }
