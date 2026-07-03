@@ -19,8 +19,11 @@
 package org.apache.pinot.query.runtime.operator;
 
 import com.google.common.base.Preconditions;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Deque;
+import java.util.Iterator;
 import java.util.List;
 import java.util.PriorityQueue;
 import javax.annotation.Nullable;
@@ -52,7 +55,10 @@ import org.slf4j.LoggerFactory;
  *   <li><b>Streaming k-way merge</b>: when the sender is known to emit each mailbox already sorted on the receiver's
  *       collation, the rows are merged incrementally with a min-heap and emitted in bounded blocks (of at most
  *       {@code blockSize} rows). Global order is preserved across block boundaries because the heap state carries over
- *       between {@link #getNextBlock()} calls.</li>
+ *       between {@link #getNextBlock()} calls. To stay deadlock-free (see {@link #refill}), a mailbox that is ready
+ *       while the merge waits on a different, slower mailbox is drained eagerly into a per-stream backlog; under
+ *       sustained key skew that backlog can grow to hold a fast sender's entire remaining output, trading some of the
+ *       strategy's memory advantage for the guarantee that no sender is ever left blocked on a full mailbox.</li>
  * </ul>
  * The k-way merge is enabled only when the {@code streamingSortedMailboxReceive} query option is explicitly
  * {@code TRUE} <b>and</b> {@link MailboxReceiveNode#isSortedOnSender()} is true. All other combinations fall back to
@@ -82,6 +88,11 @@ public class SortedMailboxReceiveOperator extends BaseMailboxReceiveOperator {
   private final Comparator<Object[]> _comparator;
   // Built lazily on the first merge call so priming (driving every handle to first-data/EOS/error) happens once.
   private PriorityQueue<Cursor> _heap;
+  // Per-sender merge state (backlog + exhaustion), built once alongside the heap during priming.
+  private List<StreamState> _streams;
+  // Mutable view of _streams used only for the sibling drain scan in refill(): entries are removed once their stream
+  // is exhausted so a stalled call doesn't keep re-scanning senders that can never produce more data.
+  private List<StreamState> _activeStreams;
   private boolean _primed;
 
   private MseBlock _eosBlock;
@@ -153,10 +164,17 @@ public class SortedMailboxReceiveOperator extends BaseMailboxReceiveOperator {
     }
     if (!_primed) {
       _heap = new PriorityQueue<>((a, b) -> _comparator.compare(a.head(), b.head()));
-      // Prime: drive every handle to its first data block / EOS / error before the first pop, so the heap holds a head
-      // for every still-active mailbox and the min is the global min.
+      _streams = new ArrayList<>();
       for (StreamHandle<ReceivingMailbox.MseBlockWithStats> handle : streamHandles()) {
-        Cursor cursor = refill(handle);
+        _streams.add(new StreamState(handle));
+      }
+      // Built before priming: refill()'s sibling drain scan runs during priming too (a stream can be starved on its
+      // very first poll), so _activeStreams must already reflect every stream.
+      _activeStreams = new ArrayList<>(_streams);
+      // Prime: drive every stream to its first data block / EOS / error before the first pop, so the heap holds a head
+      // for every still-active mailbox and the min is the global min.
+      for (StreamState state : _streams) {
+        Cursor cursor = refill(state);
         if (_eosBlock != null) {
           // An error was found while priming; refill already cached it and folded stats.
           return _eosBlock;
@@ -185,7 +203,7 @@ public class SortedMailboxReceiveOperator extends BaseMailboxReceiveOperator {
         _heap.add(cursor);
       } else {
         // Current block exhausted: refill THIS mailbox before the next pop to restore the heap invariant.
-        Cursor refilled = refill(cursor._handle);
+        Cursor refilled = refill(cursor._state);
         if (_eosBlock != null) {
           // An error was found while refilling; short-circuit immediately.
           return _eosBlock;
@@ -200,45 +218,152 @@ public class SortedMailboxReceiveOperator extends BaseMailboxReceiveOperator {
   }
 
   /**
-   * Drives ONE handle to its next non-empty data block. Returns a {@link Cursor} positioned at the first row of that
-   * block, or {@code null} when the mailbox reaches a success EOS (dropped from the merge). On an error block, folds
-   * the receiving stats via {@link #onEos()}, caches the error in {@link #_eosBlock}, and returns {@code null}.
+   * Produces the next {@link Cursor} for {@code state} without head-of-line blocking. The merge can only emit once it
+   * has the next row from {@code state}, but it must never park on {@code state} alone while sibling mailboxes fill up:
+   * that lets senders backpressure and deadlocks the single-threaded pipeline. So while {@code state} has nothing ready
+   * this drains any <em>other</em> ready stream into its backlog (relieving that sender), and only parks (on the shared
+   * new-data signal) when no stream anywhere has data. Buffered rows keep per-stream order, so global sort order is
+   * preserved. Returns {@code null} when {@code state} reaches success EOS (dropped from the merge) or on error (which
+   * is cached in {@link #_eosBlock} after folding stats via {@link #onEos()}).
    */
   @Nullable
-  private Cursor refill(StreamHandle<ReceivingMailbox.MseBlockWithStats> handle) {
+  private Cursor refill(StreamState state) {
     while (true) {
-      ReceivingMailbox.MseBlockWithStats element = handle.readBlocking();
-      MseBlock block = element.getBlock();
-      if (block.isError()) {
+      if (!state._backlog.isEmpty()) {
+        return new Cursor(state, state._backlog.poll());
+      }
+      if (_eosBlock != null) {
+        return null;
+      }
+      if (state._handle.isExhausted()) {
+        // Success EOS already seen and backlog drained: drop this mailbox from the merge.
+        return null;
+      }
+      // Try to advance THIS stream without blocking.
+      if (pollOnce(state)) {
+        if (state._handle.isExhausted()) {
+          _activeStreams.remove(state);
+        }
+        // Buffered rows (loop serves the backlog), hit success EOS (loop returns null), or read an empty block (retry).
+        continue;
+      }
+      // This stream has nothing ready. Drain any OTHER ready stream to relieve its sender's backpressure; that may in
+      // turn unblock the sender feeding this stream. Streams that reach exhaustion are pruned from _activeStreams so
+      // later calls (for any mailbox) don't keep re-scanning senders that can never produce more data.
+      boolean progressed = false;
+      Iterator<StreamState> it = _activeStreams.iterator();
+      while (it.hasNext()) {
+        StreamState other = it.next();
+        if (other == state) {
+          continue;
+        }
+        while (pollOnce(other)) {
+          progressed = true;
+          if (_eosBlock != null) {
+            return null;
+          }
+        }
+        if (other._handle.isExhausted()) {
+          it.remove();
+        }
+      }
+      if (progressed) {
+        // Draining may have delivered data (or woken this stream's sender); retry before parking.
+        continue;
+      }
+      // Nothing ready anywhere: park until any stream signals new data (or the deadline is hit).
+      ReceivingMailbox.MseBlockWithStats timedOut = _multiConsumer.awaitDataOrTerminal();
+      if (timedOut != null) {
         onEos();
-        _eosBlock = block;
+        _eosBlock = timedOut.getBlock();
         return null;
       }
-      if (block.isSuccess()) {
-        return null;
-      }
-      List<Object[]> rows = ((MseBlock.Data) block).asRowHeap().getRows();
-      if (!rows.isEmpty()) {
-        return new Cursor(handle, rows);
-      }
-      // Defensive: an empty data block carries no head, so read again.
+      // Woken: loop and retry.
     }
   }
 
   /**
-   * Drains every handle to its terminal element after early termination, folding receiving stats. Returns the cached
+   * Polls one stream once (non-blocking). Buffers any non-empty data rows into the stream's backlog and caches an error
+   * into {@link #_eosBlock}. Exhaustion itself is tracked by the underlying {@link StreamHandle#isExhausted()}, not
+   * duplicated here. Returns {@code true} if any element (data, success EOS, or error) was read, {@code false} if the
+   * stream had nothing ready.
+   */
+  private boolean pollOnce(StreamState state) {
+    if (state._handle.isExhausted() || _eosBlock != null) {
+      return false;
+    }
+    ReceivingMailbox.MseBlockWithStats element = state._handle.poll();
+    if (element == null) {
+      return false;
+    }
+    MseBlock block = element.getBlock();
+    if (block.isError()) {
+      onEos();
+      _eosBlock = block;
+      return true;
+    }
+    if (block.isSuccess()) {
+      return true;
+    }
+    List<Object[]> rows = ((MseBlock.Data) block).asRowHeap().getRows();
+    if (!rows.isEmpty()) {
+      state._backlog.add(rows);
+    }
+    // Empty data blocks carry no head; returning true lets refill loop and poll again.
+    return true;
+  }
+
+  /**
+   * Drains every handle to its terminal element after early termination, folding receiving stats. Like {@link
+   * #refill}, this must not head-of-line block on one handle while sibling mailboxes still have data buffered: doing so
+   * would let their senders backpressure and deadlock the pipeline, exactly as it would during normal merging. So this
+   * polls every not-yet-exhausted handle in round-robin passes (discarding data, since early termination means the
+   * result is no longer needed) and only parks when a full pass makes no progress on any handle. Returns the cached
    * error block if any handle yields one, otherwise a success EOS.
    */
   private MseBlock drainToEos() {
-    for (StreamHandle<ReceivingMailbox.MseBlockWithStats> handle : streamHandles()) {
-      while (!handle.isExhausted()) {
-        MseBlock block = handle.readBlocking().getBlock();
+    List<StreamHandle<ReceivingMailbox.MseBlockWithStats>> handles = streamHandles();
+    int numRemaining = 0;
+    boolean[] exhausted = new boolean[handles.size()];
+    for (int i = 0; i < handles.size(); i++) {
+      if (handles.get(i).isExhausted()) {
+        exhausted[i] = true;
+      } else {
+        numRemaining++;
+      }
+    }
+    while (numRemaining > 0) {
+      boolean progressed = false;
+      for (int i = 0; i < handles.size(); i++) {
+        if (exhausted[i]) {
+          continue;
+        }
+        StreamHandle<ReceivingMailbox.MseBlockWithStats> handle = handles.get(i);
+        ReceivingMailbox.MseBlockWithStats element = handle.poll();
+        if (element == null) {
+          continue;
+        }
+        progressed = true;
+        MseBlock block = element.getBlock();
         if (block.isError()) {
           onEos();
           _eosBlock = block;
           return block;
         }
-        // Data or success EOS: success flips isExhausted() to true and ends the loop; data is discarded.
+        if (handle.isExhausted()) {
+          exhausted[i] = true;
+          numRemaining--;
+        }
+        // Data blocks are discarded; a still-active handle is retried on a later pass.
+      }
+      if (!progressed) {
+        // No handle had anything ready this pass: park until any stream signals new data (or the deadline is hit).
+        ReceivingMailbox.MseBlockWithStats timedOut = _multiConsumer.awaitDataOrTerminal();
+        if (timedOut != null) {
+          onEos();
+          _eosBlock = timedOut.getBlock();
+          return _eosBlock;
+        }
       }
     }
     onEos();
@@ -250,32 +375,57 @@ public class SortedMailboxReceiveOperator extends BaseMailboxReceiveOperator {
   public void close() {
     super.close();
     _rows.clear();
-    if (_heap != null) {
-      _heap.clear();
-    }
+    clearMergeState();
   }
 
   @Override
   public void cancel(Throwable t) {
     super.cancel(t);
     _rows.clear();
+    clearMergeState();
+  }
+
+  private void clearMergeState() {
     if (_heap != null) {
       _heap.clear();
+    }
+    if (_streams != null) {
+      for (StreamState state : _streams) {
+        state._backlog.clear();
+      }
+    }
+    if (_activeStreams != null) {
+      _activeStreams.clear();
     }
   }
 
   /**
-   * A cursor over one mailbox's current data block. Holds the handle so the merge can refill this specific mailbox when
-   * the block is exhausted. Created only for non-empty blocks, so {@link #head()} is always valid until {@link #_idx}
-   * runs past the end.
+   * Per-sender merge state: the stream handle plus a backlog of data blocks buffered ahead of the merge's current
+   * position. Rows are staged here (in arrival order, which the sender guarantees is sorted) when the merge drains this
+   * mailbox while waiting on another stream. Exhaustion is tracked by {@link StreamHandle#isExhausted()} on the handle
+   * itself, not duplicated here.
+   */
+  private static final class StreamState {
+    final StreamHandle<ReceivingMailbox.MseBlockWithStats> _handle;
+    final Deque<List<Object[]>> _backlog = new ArrayDeque<>();
+
+    StreamState(StreamHandle<ReceivingMailbox.MseBlockWithStats> handle) {
+      _handle = handle;
+    }
+  }
+
+  /**
+   * A cursor over one mailbox's current data block. Holds the owning {@link StreamState} so the merge can refill this
+   * specific mailbox (from its backlog or the stream) when the block is exhausted. Created only for non-empty blocks,
+   * so {@link #head()} is always valid until {@link #_idx} runs past the end.
    */
   private static final class Cursor {
-    final StreamHandle<ReceivingMailbox.MseBlockWithStats> _handle;
+    final StreamState _state;
     final List<Object[]> _rows;
     int _idx;
 
-    Cursor(StreamHandle<ReceivingMailbox.MseBlockWithStats> handle, List<Object[]> rows) {
-      _handle = handle;
+    Cursor(StreamState state, List<Object[]> rows) {
+      _state = state;
       _rows = rows;
     }
 

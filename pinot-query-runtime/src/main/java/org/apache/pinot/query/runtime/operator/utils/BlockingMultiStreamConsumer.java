@@ -349,6 +349,35 @@ public abstract class BlockingMultiStreamConsumer<E> implements AutoCloseable {
   }
 
   /**
+   * Parks the consumer thread until any stream signals new data or the deadline is reached. Used by the per-stream
+   * (k-way merge) read mode: after finding every stream momentarily empty, a caller waits here for progress instead of
+   * committing to a single stream (which would head-of-line block while sibling mailboxes fill up and their senders
+   * backpressure, deadlocking the pipeline). Returns {@code null} when woken by new data (the caller should re-poll the
+   * streams), or the terminal error element (already routed through {@link #onTimeout()}) when the deadline is
+   * exceeded.
+   *
+   * <p>This method is called by the consumer thread.
+   */
+  @Nullable
+  public E awaitDataOrTerminal() {
+    latchMode(Mode.PER_STREAM);
+    if (_errorBlock != null) {
+      return _errorBlock;
+    }
+    try {
+      long timeoutMs = _deadlineMs - System.currentTimeMillis();
+      if (timeoutMs <= 0 || _newDataReady.poll(timeoutMs, TimeUnit.MILLISECONDS) == null) {
+        _errorBlock = onTimeout();
+        return _errorBlock;
+      }
+      return null;
+    } catch (Exception e) {
+      _errorBlock = onException(e);
+      return _errorBlock;
+    }
+  }
+
+  /**
    * Latches the read mode on first use and enforces that a single consumer instance is read in exactly one mode.
    *
    * @throws IllegalStateException if a different mode was already latched.
@@ -385,6 +414,15 @@ public abstract class BlockingMultiStreamConsumer<E> implements AutoCloseable {
      * and every handle returns that same error element on subsequent calls). Never returns null.
      */
     T readBlocking();
+
+    /**
+     * Non-blocking read of the next element from this stream only. Returns a data element, a success-EOS element (after
+     * which {@link #isExhausted()} is true), an error element (after which the whole consumer is in error), or
+     * {@code null} when nothing is ready yet. Unlike {@link #readBlocking()} this never parks the consumer thread, so
+     * the k-way merge can drain whichever siblings are ready while waiting for the specific stream it needs.
+     */
+    @Nullable
+    T poll();
 
     /**
      * Returns true once this stream has emitted a success EOS, meaning no more data will come from it.
@@ -490,6 +528,20 @@ public abstract class BlockingMultiStreamConsumer<E> implements AutoCloseable {
         _errorBlock = onException(e);
         return _errorBlock;
       }
+    }
+
+    @Nullable
+    @Override
+    public E poll() {
+      if (_errorBlock != null) {
+        // A global error (from this or any other handle) short-circuits every handle.
+        return _errorBlock;
+      }
+      if (_exhausted) {
+        // Success EOS already seen; do not poll an already-released mailbox again.
+        return null;
+      }
+      return pollThisStream();
     }
 
     /**

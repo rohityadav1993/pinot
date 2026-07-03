@@ -60,6 +60,7 @@ import static org.apache.pinot.common.utils.DataSchema.ColumnDataType.INT;
 import static org.apache.pinot.common.utils.DataSchema.ColumnDataType.LONG;
 import static org.apache.pinot.common.utils.DataSchema.ColumnDataType.STRING;
 import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.mock;
@@ -369,6 +370,166 @@ public class SortedMailboxReceiveOperatorTest {
       assertEquals(all.size(), 2);
       assertEquals(all.get(0)[0], 1);
       assertEquals(all.get(1)[0], 2);
+    }
+  }
+
+  /**
+   * Regression for the streaming k-way merge pipeline deadlock: when the merge needs the next row from one stream that
+   * is momentarily empty, it must drain the OTHER ready stream (relieving that sender's backpressure) instead of
+   * head-of-line blocking on the starved stream. Here mailbox1 is starved (returns null) and only becomes ready when
+   * mailbox2 is polled during draining; a merge that blocks on mailbox1 alone never polls mailbox2 and times out.
+   */
+  @Test
+  public void shouldDrainReadySiblingWhenOtherStreamStarved() {
+    when(_mailboxService.getReceivingMailbox(eq(MAILBOX_ID_1))).thenReturn(_mailbox1);
+    // Capture mailbox1's reader (registered in the operator ctor) so mailbox2's poll can wake it.
+    ReceivingMailbox.Reader[] reader1 = new ReceivingMailbox.Reader[1];
+    doAnswer(inv -> {
+      reader1[0] = inv.getArgument(0);
+      return null;
+    }).when(_mailbox1).registeredReader(any());
+    // mailbox1: {1}, then starved (null), then {3}, then EOS. The null forces the merge to look elsewhere.
+    when(_mailbox1.poll()).thenReturn(
+            OperatorTestUtil.blockWithStats(DATA_SCHEMA, new Object[]{1, 1}))
+        .thenReturn(null)
+        .thenReturn(OperatorTestUtil.blockWithStats(DATA_SCHEMA, new Object[]{3, 3}))
+        .thenReturn(OperatorTestUtil.eosWithEmptyStats());
+    when(_mailboxService.getReceivingMailbox(eq(MAILBOX_ID_2))).thenReturn(_mailbox2);
+    // mailbox2: {2}; polling for the next block ({4}) wakes mailbox1 (models the sibling drain unblocking the starved
+    // sender); then EOS.
+    when(_mailbox2.poll()).thenReturn(
+            OperatorTestUtil.blockWithStats(DATA_SCHEMA, new Object[]{2, 2}))
+        .thenAnswer(inv -> {
+          reader1[0].blockReadyToRead();
+          return OperatorTestUtil.blockWithStats(DATA_SCHEMA, new Object[]{4, 4});
+        })
+        .thenReturn(OperatorTestUtil.eosWithEmptyStats());
+    try (SortedMailboxReceiveOperator operator = getMergeOperator(_stageMetadataBoth,
+        RelDistribution.Type.HASH_DISTRIBUTED, DATA_SCHEMA, FIELD_COLLATIONS,
+        System.currentTimeMillis() + 30_000L,
+        Map.of(CommonConstants.Broker.Request.QueryOptionKey.STREAMING_SORTED_MAILBOX_RECEIVE, "true"))) {
+      List<Object[]> all = new ArrayList<>();
+      MseBlock block = operator.nextBlock();
+      while (block.isData()) {
+        all.addAll(((MseBlock.Data) block).asRowHeap().getRows());
+        block = operator.nextBlock();
+      }
+      assertTrue(block.isSuccess());
+      assertEquals(all.size(), 4);
+      for (int i = 0; i < 4; i++) {
+        assertEquals(all.get(i)[0], i + 1);
+      }
+      // Prove the sibling drain actually ran (not just that the output happens to be correct): mailbox2 must have been
+      // polled past its first block (drained for row {4,4} and its EOS) while mailbox1 was starved, and mailbox1 must
+      // have been re-polled after the starved (null) response instead of parking on it forever.
+      verify(_mailbox2, atLeast(3)).poll();
+      verify(_mailbox1, atLeast(3)).poll();
+    }
+  }
+
+  /**
+   * Regression for error propagation during the sibling drain: while refilling a starved stream, the merge polls
+   * sibling streams non-blocking; if a sibling yields an error mid-drain, that error must short-circuit the merge
+   * immediately rather than being swallowed or causing a hang while the starved stream is still awaited.
+   */
+  @Test
+  public void shouldPropagateErrorFromSiblingDuringDrain() {
+    when(_mailboxService.getReceivingMailbox(eq(MAILBOX_ID_1))).thenReturn(_mailbox1);
+    // mailbox1: {1}, then starved forever (null) -- it never itself produces the error or EOS.
+    when(_mailbox1.poll()).thenReturn(
+            OperatorTestUtil.blockWithStats(DATA_SCHEMA, new Object[]{1, 1}))
+        .thenReturn(null);
+    when(_mailboxService.getReceivingMailbox(eq(MAILBOX_ID_2))).thenReturn(_mailbox2);
+    // mailbox2: {2}, then an error -- surfaced while mailbox2 is drained as a sibling of the starved mailbox1.
+    String errorMessage = "SIBLING ERROR";
+    when(_mailbox2.poll()).thenReturn(
+            OperatorTestUtil.blockWithStats(DATA_SCHEMA, new Object[]{2, 2}))
+        .thenReturn(OperatorTestUtil.errorWithEmptyStats(new RuntimeException(errorMessage)));
+    try (SortedMailboxReceiveOperator operator = getMergeOperator(_stageMetadataBoth,
+        RelDistribution.Type.HASH_DISTRIBUTED, DATA_SCHEMA, FIELD_COLLATIONS,
+        System.currentTimeMillis() + 30_000L,
+        Map.of(CommonConstants.Broker.Request.QueryOptionKey.STREAMING_SORTED_MAILBOX_RECEIVE, "true"))) {
+      MseBlock block = operator.nextBlock();
+      assertTrue(block.isError());
+      assertTrue(((ErrorMseBlock) block).getErrorMessages().get(QueryErrorCode.UNKNOWN).contains(errorMessage));
+    }
+  }
+
+  /**
+   * Regression for the early-termination drain path (drainToEos), which was rewritten to be cooperative for the same
+   * reason as the merge itself: it must not head-of-line block on one handle while a sibling still has buffered data,
+   * or the sibling's sender backpressures and the pipeline deadlocks. mailbox1 is starved (null) until mailbox2 is
+   * polled during the round-robin drain; a drain that blocks on mailbox1 alone never polls mailbox2 and times out.
+   */
+  @Test
+  public void shouldDrainSiblingsCooperativelyOnEarlyTerminate() {
+    when(_mailboxService.getReceivingMailbox(eq(MAILBOX_ID_1))).thenReturn(_mailbox1);
+    ReceivingMailbox.Reader[] reader1 = new ReceivingMailbox.Reader[1];
+    doAnswer(inv -> {
+      reader1[0] = inv.getArgument(0);
+      return null;
+    }).when(_mailbox1).registeredReader(any());
+    // mailbox1: starved (null), then EOS. It only makes progress once woken by mailbox2's drain.
+    when(_mailbox1.poll()).thenReturn(null).thenReturn(OperatorTestUtil.eosWithEmptyStats());
+    when(_mailboxService.getReceivingMailbox(eq(MAILBOX_ID_2))).thenReturn(_mailbox2);
+    // mailbox2: a data block (discarded on early-termination) whose poll wakes mailbox1, then EOS.
+    when(_mailbox2.poll())
+        .thenAnswer(inv -> {
+          reader1[0].blockReadyToRead();
+          return OperatorTestUtil.blockWithStats(DATA_SCHEMA, new Object[]{1, 1});
+        })
+        .thenReturn(OperatorTestUtil.eosWithEmptyStats());
+    try (SortedMailboxReceiveOperator operator = getMergeOperator(_stageMetadataBoth,
+        RelDistribution.Type.HASH_DISTRIBUTED, DATA_SCHEMA, FIELD_COLLATIONS,
+        System.currentTimeMillis() + 10_000L,
+        Map.of(CommonConstants.Broker.Request.QueryOptionKey.STREAMING_SORTED_MAILBOX_RECEIVE, "true"))) {
+      operator.earlyTerminate();
+      assertTrue(operator.nextBlock().isSuccess());
+      verify(_mailbox1).earlyTerminate();
+      verify(_mailbox2).earlyTerminate();
+      // Both mailboxes were drained to EOS cooperatively (round-robin), not head-of-line blocked on the starved one.
+      verify(_mailbox1, atLeast(2)).poll();
+      verify(_mailbox2, atLeast(2)).poll();
+    }
+  }
+
+  /**
+   * Regression proving the per-stream backlog is served in FIFO order. While mailbox1 (the current min source) is
+   * starved, the greedy sibling drain buffers ALL of mailbox2's ready blocks ({3},{5}) into mailbox2's backlog at once;
+   * mailbox2 also reaches EOS during that drain. The merge must then serve that multi-block backlog oldest-first so the
+   * global output stays sorted (1,2,3,4,5). A LIFO backlog would emit 5 before 3.
+   */
+  @Test
+  public void shouldServeMultiBlockBacklogInOrderWhenStreamStarved() {
+    when(_mailboxService.getReceivingMailbox(eq(MAILBOX_ID_1))).thenReturn(_mailbox1);
+    // mailbox1 (min source): {1}, starved (null), {4}, EOS.
+    when(_mailbox1.poll()).thenReturn(
+            OperatorTestUtil.blockWithStats(DATA_SCHEMA, new Object[]{1, 1}))
+        .thenReturn(null)
+        .thenReturn(OperatorTestUtil.blockWithStats(DATA_SCHEMA, new Object[]{4, 4}))
+        .thenReturn(OperatorTestUtil.eosWithEmptyStats());
+    when(_mailboxService.getReceivingMailbox(eq(MAILBOX_ID_2))).thenReturn(_mailbox2);
+    // mailbox2 (fast sibling): {2}, then {3},{5} buffered together during the drain, then EOS (also during the drain).
+    when(_mailbox2.poll()).thenReturn(
+            OperatorTestUtil.blockWithStats(DATA_SCHEMA, new Object[]{2, 2}),
+            OperatorTestUtil.blockWithStats(DATA_SCHEMA, new Object[]{3, 3}),
+            OperatorTestUtil.blockWithStats(DATA_SCHEMA, new Object[]{5, 5}),
+            OperatorTestUtil.eosWithEmptyStats());
+    try (SortedMailboxReceiveOperator operator = getMergeOperator(_stageMetadataBoth,
+        RelDistribution.Type.HASH_DISTRIBUTED, DATA_SCHEMA, FIELD_COLLATIONS,
+        System.currentTimeMillis() + 10_000L,
+        Map.of(CommonConstants.Broker.Request.QueryOptionKey.STREAMING_SORTED_MAILBOX_RECEIVE, "true"))) {
+      List<Object[]> all = new ArrayList<>();
+      MseBlock block = operator.nextBlock();
+      while (block.isData()) {
+        all.addAll(((MseBlock.Data) block).asRowHeap().getRows());
+        block = operator.nextBlock();
+      }
+      assertTrue(block.isSuccess());
+      assertEquals(all.size(), 5);
+      for (int i = 0; i < 5; i++) {
+        assertEquals(all.get(i)[0], i + 1);
+      }
     }
   }
 

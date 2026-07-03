@@ -45,6 +45,7 @@ import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
+import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertSame;
 import static org.testng.Assert.assertThrows;
 import static org.testng.Assert.assertTrue;
@@ -216,6 +217,90 @@ public class BlockingMultiStreamConsumerTest {
     BlockingMultiStreamConsumer.OfMseBlock consumer = newConsumer(FAR_FUTURE, List.of(s0));
     consumer.streamHandles().get(0).earlyTerminate();
     assertTrue(s0._earlyTerminated);
+  }
+
+  /**
+   * {@link BlockingMultiStreamConsumer.StreamHandle#poll()} is the non-blocking primitive the k-way merge's cooperative
+   * drain relies on: it must never park, must surface data/EOS exactly like {@code readBlocking()} does, and must not
+   * re-poll an already-exhausted stream (mirrors the mailbox-release comment on the {@code Handle} implementation).
+   */
+  @Test
+  public void pollIsNonBlockingAndTracksExhaustion() {
+    FakeStream s0 = new FakeStream("s0");
+    BlockingMultiStreamConsumer.OfMseBlock consumer = newConsumer(FAR_FUTURE, List.of(s0));
+    BlockingMultiStreamConsumer.StreamHandle<ReceivingMailbox.MseBlockWithStats> h0 =
+        consumer.streamHandles().get(0);
+
+    // Nothing scripted yet: poll() must return null immediately rather than parking.
+    assertNull(h0.poll());
+    assertFalse(h0.isExhausted());
+
+    Object[] row = new Object[]{9, 9};
+    s0.enqueue(OperatorTestUtil.blockWithStats(DATA_SCHEMA, row));
+    ReceivingMailbox.MseBlockWithStats data = h0.poll();
+    assertNotNull(data);
+    assertEquals(((MseBlock.Data) data.getBlock()).asRowHeap().getRows().get(0), row);
+    assertFalse(h0.isExhausted());
+
+    // Drained again with nothing scripted: back to null, not blocking.
+    assertNull(h0.poll());
+
+    s0.enqueue(OperatorTestUtil.eosWithEmptyStats());
+    assertTrue(h0.poll().getBlock().isSuccess());
+    assertTrue(h0.isExhausted());
+
+    // An exhausted handle's poll() returns null without touching the (already-released) underlying stream again.
+    assertNull(h0.poll());
+  }
+
+  @Test
+  public void pollShortCircuitsOnGlobalError() {
+    FakeStream s0 = new FakeStream("s0");
+    FakeStream s1 = new FakeStream("s1");
+    s0.enqueue(OperatorTestUtil.errorWithEmptyStats(new RuntimeException("boom")));
+    s1.enqueue(OperatorTestUtil.blockWithStats(DATA_SCHEMA, new Object[]{1, 1}));
+
+    BlockingMultiStreamConsumer.OfMseBlock consumer = newConsumer(FAR_FUTURE, List.of(s0, s1));
+    List<BlockingMultiStreamConsumer.StreamHandle<ReceivingMailbox.MseBlockWithStats>> handles =
+        consumer.streamHandles();
+
+    ReceivingMailbox.MseBlockWithStats err = handles.get(0).poll();
+    assertNotNull(err);
+    assertTrue(err.getBlock().isError());
+    // The other stream still has data queued, but the global error must short-circuit its poll() too.
+    assertSame(handles.get(1).poll(), err);
+  }
+
+  @Test
+  public void awaitDataOrTerminalReturnsNullOnWakeAndErrorOnTimeout()
+      throws InterruptedException {
+    FakeStream s0 = new FakeStream("s0");
+    BlockingMultiStreamConsumer.OfMseBlock consumer = newConsumer(FAR_FUTURE, List.of(s0));
+    consumer.streamHandles();
+
+    Thread producer = new Thread(() -> {
+      try {
+        Thread.sleep(150L);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        return;
+      }
+      s0.fireNewData();
+    });
+    producer.start();
+    // Parks until the producer's new-data signal wakes it; returns null (caller should re-poll) rather than an
+    // element, since awaitDataOrTerminal() never reads from any stream itself.
+    assertNull(consumer.awaitDataOrTerminal());
+    producer.join();
+
+    // A deadline already in the past must return the cached timeout error instead of parking.
+    BlockingMultiStreamConsumer.OfMseBlock timedOut =
+        newConsumer(System.currentTimeMillis() - 1L, List.of(new FakeStream("s1")));
+    timedOut.streamHandles();
+    ReceivingMailbox.MseBlockWithStats element = timedOut.awaitDataOrTerminal();
+    assertNotNull(element);
+    assertTrue(element.getBlock().isError());
+    assertTrue(((ErrorMseBlock) element.getBlock()).getErrorMessages().containsKey(QueryErrorCode.EXECUTION_TIMEOUT));
   }
 
   /**
