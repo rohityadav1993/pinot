@@ -18,11 +18,14 @@
  */
 package org.apache.pinot.perf.sortedmerge;
 
+import com.google.common.annotations.VisibleForTesting;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
+import javax.annotation.Nullable;
 import org.apache.pinot.perf.sortedmerge.SortedMergeDriver.OrderBy;
+import org.apache.pinot.perf.sortedmerge.SortedMergeDriver.Result;
 import org.apache.pinot.segment.spi.IndexSegment;
 import org.apache.pinot.spi.utils.CommonConstants.Server.SortedSelectionMergeMode;
 
@@ -141,63 +144,27 @@ public final class SortedMergeMemoryProbe {
                       maxExecutionThreads, orderBy), executorService, collectRows, true);
           String config =
               overlap + " depth=" + depth + " limit=" + limit + " keyCardinality=" + keyCardinality;
-          if (off._numRows != on._numRows) {
-            failures.add(config + ": row count OFF=" + off._numRows + " ON=" + on._numRows);
+          String failureReason = cellVerdict(off, on, orderBy, collectRows);
+          if (failureReason != null) {
+            failures.add(config + ": " + failureReason);
             continue;
           }
 
           if (strict) {
-            // OrderBy.TS_VAL, the pre-existing shape: output is byte-identical to before OrderBy existed.
-            if (off._rowDigest != on._rowDigest) {
-              failures.add(
-                  config + ": multiset digest differs (OFF=" + off._rowDigest + " ON=" + on._rowDigest + ")");
-              continue;
-            }
-            if (collectRows) {
-              if (!SortedMergeDriver.canonicalize(off._rows).equals(SortedMergeDriver.canonicalize(on._rows))) {
-                failures.add(config + ": canonical multiset differs");
-                continue;
-              }
-              // Both arms, not just ON. The OFF arm's combine returns a priority-queue-backed block, so its row
-              // order is worth asserting rather than assuming; the TS_ONLY branch already checks both and passes,
-              // which is the evidence that this is a real invariant and not a spurious failure waiting to happen.
-              SortedMergeDriver.assertSortedByTs(off._rows);
-              SortedMergeDriver.assertSortedByTs(on._rows);
-            }
             System.out.printf(
                 "[arm4] gate OK  %-40s rows=%d blocks OFF=%d ON=%d numTasks=%d segmentsProcessed OFF=%d ON=%d%n",
                 config, on._numRows, off._numBlocks, on._numBlocks, off._numTasks, off._numSegmentsProcessed,
                 on._numSegmentsProcessed);
           } else {
-            // OrderBy.TS_ONLY: the order is not total, so the full-row digest was never computed (computeDigest was
-            // passed false above) and must not be compared here. Fall back to the weaker, tie-sound comparison:
-            // the multiset of tsCol values (which rows tied on tsCol come back is not determined, but how many
-            // carry each distinct value is) plus sortedness, both of which still need materialised rows. The
-            // checked=[...] tag makes the weaker level visible rather than letting it pass silently.
-            // The tsCol-value digest is sound under ties and needs no retained rows, so unlike the full-row
-            // digest it is available at every limit. That is what stops the cells above FULL_MULTISET_LIMIT -- which
-            // is exactly where the crossover this harness exists to locate sits -- from degrading to a bare row
+            // The checked=[...] tag makes the weaker level visible rather than letting it pass silently. The
+            // tsCol-value digest is sound under ties and needs no retained rows, so unlike the full-row digest it
+            // is available at every limit. That is what stops the cells above FULL_MULTISET_LIMIT -- which is
+            // exactly where the crossover this harness exists to locate sits -- from degrading to a bare row
             // count, which would pass for two arms returning completely different keys.
-            if (off._tsDigest != on._tsDigest) {
-              failures.add(
-                  config + ": tsCol value digest differs (OFF=" + off._tsDigest + " ON=" + on._tsDigest + ")");
-              continue;
-            }
-            String checkLevel;
-            if (collectRows) {
-              if (!SortedMergeDriver.tsColumnMultiset(off._rows).equals(
-                  SortedMergeDriver.tsColumnMultiset(on._rows))) {
-                failures.add(config + ": tsCol value multiset differs");
-                continue;
-              }
-              SortedMergeDriver.assertSortedByTs(off._rows);
-              SortedMergeDriver.assertSortedByTs(on._rows);
-              checkLevel = "tsCol digest + tsCol multiset + sortedness (no full-row check: ties are not a total "
-                  + "order)";
-            } else {
-              checkLevel = "tsCol digest only (rows not retained above FULL_MULTISET_LIMIT, so no multiset and no "
-                  + "sortedness check)";
-            }
+            String checkLevel = collectRows
+                ? "tsCol digest + tsCol multiset + sortedness (no full-row check: ties are not a total order)"
+                : "tsCol digest only (rows not retained above FULL_MULTISET_LIMIT, so no multiset and no "
+                    + "sortedness check)";
             // Whether the two arms actually chose different tied rows. Both full-row digests are computed, and
             // under this shape they are allowed to differ -- that freedom is the whole reason the strict comparison
             // had to be relaxed. Printing it turns "the gate was weakened" from an assertion into an observation:
@@ -224,6 +191,58 @@ public final class SortedMergeMemoryProbe {
       System.out.println("  " + failure);
     }
     return EXIT_ERROR;
+  }
+
+  /// The per-cell pass/fail decision behind {@link #gate}, pulled out so the choice of strict versus tie-sound
+  /// comparison -- and which checks run at which limits -- has exactly one implementation and can be driven directly
+  /// from a test instead of only through a full `gate` run, where a correct pair of arms never exercises the fail
+  /// path at all. Pure: no printing, no I/O, no exit codes. Returns the failure reason to report for this cell, or
+  /// `null` when it passes.
+  ///
+  /// <p>The one exception to "pure": a sortedness violation is a hard invariant break, not a soft mismatch, so it is
+  /// reported by letting {@link SortedMergeDriver#assertSortedByTs} throw rather than by returning a reason string --
+  /// exactly as `gate` did before this method existed.
+  @VisibleForTesting
+  @Nullable
+  static String cellVerdict(Result off, Result on, OrderBy orderBy, boolean collectRows) {
+    if (off._numRows != on._numRows) {
+      return "row count OFF=" + off._numRows + " ON=" + on._numRows;
+    }
+
+    if (orderBy == OrderBy.TS_VAL) {
+      // OrderBy.TS_VAL, the pre-existing shape: output is byte-identical to before OrderBy existed.
+      if (off._rowDigest != on._rowDigest) {
+        return "multiset digest differs (OFF=" + off._rowDigest + " ON=" + on._rowDigest + ")";
+      }
+      if (collectRows) {
+        if (!SortedMergeDriver.canonicalize(off._rows).equals(SortedMergeDriver.canonicalize(on._rows))) {
+          return "canonical multiset differs";
+        }
+        // Both arms, not just ON. The OFF arm's combine returns a priority-queue-backed block, so its row
+        // order is worth asserting rather than assuming; the TS_ONLY branch already checks both and passes,
+        // which is the evidence that this is a real invariant and not a spurious failure waiting to happen.
+        SortedMergeDriver.assertSortedByTs(off._rows);
+        SortedMergeDriver.assertSortedByTs(on._rows);
+      }
+      return null;
+    }
+
+    // OrderBy.TS_ONLY: the order is not total, so the full-row digest -- which is still computed, and is what
+    // the caller's armsPickedDifferentTiedRows is derived from -- must not be compared here, because two correct
+    // arms are free to return different tied rows. Fall back to the weaker, tie-sound comparison:
+    // the multiset of tsCol values (which rows tied on tsCol come back is not determined, but how many
+    // carry each distinct value is) plus sortedness, both of which still need materialised rows.
+    if (off._tsDigest != on._tsDigest) {
+      return "tsCol value digest differs (OFF=" + off._tsDigest + " ON=" + on._tsDigest + ")";
+    }
+    if (collectRows) {
+      if (!SortedMergeDriver.tsColumnMultiset(off._rows).equals(SortedMergeDriver.tsColumnMultiset(on._rows))) {
+        return "tsCol value multiset differs";
+      }
+      SortedMergeDriver.assertSortedByTs(off._rows);
+      SortedMergeDriver.assertSortedByTs(on._rows);
+    }
+    return null;
   }
 
   /// One configuration, once. Success means the run completed inside the JVM's heap; the caller learns the heap it
