@@ -18,9 +18,15 @@
  */
 package org.apache.pinot.perf.sortedmerge;
 
+import com.google.common.annotations.VisibleForTesting;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
+import java.nio.channels.OverlappingFileLockException;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -80,7 +86,13 @@ import org.apache.pinot.spi.utils.builder.TableConfigBuilder;
 /// long-lived host running many bisections should budget for that footprint under {@link FileUtils#getTempDirectory}.
 ///
 /// <p>Thread-safe: the in-JVM cache is a {@link ConcurrentHashMap} and building is serialized per key. Cross-JVM
-/// reuse is validated defensively (see above) precisely because it cannot rely on in-process locking.
+/// access is additionally serialized per key by a sibling `.lock` file next to each key's output directory (see
+/// [#loadOrBuild]), so at most one process at a time is ever inside the validate-or-build critical section for a
+/// given key. [#destroyAll()] and [#purgeAll()] honor the same per-key lock before deleting a key's directory (see
+/// [#deleteAllKeysUnderLock]), so a `-Darm4.fixture.keep=false` teardown or a [#purgeAll()] call can never delete a
+/// directory a concurrent [#loadOrBuild] is still writing into. The defensive validation in [#tryLoadExisting]
+/// remains in place as well, since the lock only stops two processes from writing the same key concurrently, not a
+/// fixture that was left corrupt by a process that crashed while holding the lock.
 ///
 /// <p>`keyCardinality` (K) is a second axis: it controls how many consecutive rows within a segment share one
 /// {@link #TS_COL} value (see [#records]), rather than how many segments a value spans. K=1 --
@@ -168,6 +180,10 @@ public final class SortedMergeFixture {
     FULL
   }
 
+  /// System property pointing the on-disk fixture at a different directory. For tests only -- see [#baseDir()].
+  @VisibleForTesting
+  static final String BASE_DIR_PROPERTY = "arm4.fixture.dir";
+
   private static final Map<String, List<IndexSegment>> SEGMENT_CACHE = new ConcurrentHashMap<>();
   private static final Map<String, Integer> DEPTH_CACHE = new ConcurrentHashMap<>();
 
@@ -178,8 +194,14 @@ public final class SortedMergeFixture {
     Runtime.getRuntime().addShutdownHook(new Thread(SortedMergeFixture::destroyAll, "arm4-fixture-cleanup"));
   }
 
-  private static File baseDir() {
-    return new File(FileUtils.getTempDirectory(), "pinot-arm4-sorted-merge");
+  @VisibleForTesting
+  static File baseDir() {
+    // Overridable only so a test can point the fixture somewhere disposable. Without this, any test touching
+    // purgeAll() or destroyAll() would delete the real multi-gigabyte fixtures that published results were measured
+    // against, since both delete every key under this directory. Unset in every non-test path, so the default -- and
+    // therefore the on-disk cache every previous run built -- is unchanged.
+    String override = System.getProperty(BASE_DIR_PROPERTY);
+    return override != null ? new File(override) : new File(FileUtils.getTempDirectory(), "pinot-arm4-sorted-merge");
   }
 
   /// As [#segments(Overlap, int, int, int)] with [#DEFAULT_KEY_CARDINALITY], for callers written before the
@@ -230,6 +252,16 @@ public final class SortedMergeFixture {
 
   /// Reuses a validated on-disk fixture if one exists for `key`, otherwise builds it fresh. This is the cross-JVM
   /// half of the cache described in the class javadoc; see [#tryLoadExisting] for the validation rules.
+  ///
+  /// <p>The whole validate-or-build sequence runs under an exclusive lock on a sibling `<key>.lock` file, acquired
+  /// before the `outDir.isDirectory()` check and held through the return of [#build]. The lock file cannot live
+  /// inside `outDir` because both [#build] and every failure branch of [#tryLoadExisting] delete `outDir` wholesale;
+  /// a lock file inside it would either vanish out from under its own holder or be recreated as a distinct inode that
+  /// a waiting process is not holding. Ordering the acquire before the directory check is what makes waiting
+  /// productive rather than redundant: a process that blocks here is unblocked only after some other process's build
+  /// (or purge) has finished and released the lock, so it re-enters the check and validation fresh and takes the
+  /// reuse path instead of racing to rebuild what was just built. [#PURGE_PROPERTY] is handled inside the lock for
+  /// the same reason -- otherwise a purge could race a concurrent build on the same key.
   private static List<IndexSegment> loadOrBuild(Overlap overlap, int numSegments, int rowsPerSegment,
       int keyCardinality, String key) {
     if (numSegments < 1 || rowsPerSegment < 10) {
@@ -242,21 +274,52 @@ public final class SortedMergeFixture {
       throw new IllegalArgumentException("keyCardinality must be >= 1, got " + keyCardinality + " for " + key);
     }
     File outDir = new File(baseDir(), key);
-    if (Boolean.getBoolean(PURGE_PROPERTY)) {
-      System.out.printf("[arm4] %s: purging %s before build because -D%s=true%n", key, outDir, PURGE_PROPERTY);
-      FileUtils.deleteQuietly(outDir);
-    } else if (outDir.isDirectory()) {
-      long startNs = System.nanoTime();
-      List<IndexSegment> reused = tryLoadExisting(outDir, overlap, numSegments, rowsPerSegment, keyCardinality, key);
-      if (reused != null) {
-        int depth = measureDepth(reused);
-        DEPTH_CACHE.put(key, depth);
-        System.out.printf("[arm4] reused %s in %.1fs, measured overlap depth %d%n", key,
-            (System.nanoTime() - startNs) / 1e9, depth);
-        return reused;
+    // FileLock is scoped to the JVM (not the thread), so a second lock() on the same file from this JVM would throw
+    // OverlappingFileLockException instead of blocking. That can't happen here: within a JVM, SEGMENT_CACHE's
+    // computeIfAbsent already serializes every call for this exact key before this method is ever entered, and a
+    // different key maps to a different lock file, so no two invocations of this method in the same JVM ever open
+    // the same lock file concurrently.
+    try (FileChannel lockChannel = FileChannel.open(lockFile(key).toPath(), StandardOpenOption.CREATE,
+        StandardOpenOption.WRITE);
+        FileLock lock = lockChannel.lock()) {
+      if (Boolean.getBoolean(PURGE_PROPERTY)) {
+        System.out.printf("[arm4] %s: purging %s before build because -D%s=true%n", key, outDir, PURGE_PROPERTY);
+        FileUtils.deleteQuietly(outDir);
+      } else if (outDir.isDirectory()) {
+        long startNs = System.nanoTime();
+        List<IndexSegment> reused =
+            tryLoadExisting(outDir, overlap, numSegments, rowsPerSegment, keyCardinality, key);
+        if (reused != null) {
+          int depth = measureDepth(reused);
+          DEPTH_CACHE.put(key, depth);
+          System.out.printf("[arm4] reused %s in %.1fs, measured overlap depth %d%n", key,
+              (System.nanoTime() - startNs) / 1e9, depth);
+          return reused;
+        }
       }
+      return build(overlap, numSegments, rowsPerSegment, keyCardinality, key, outDir);
+    } catch (OverlappingFileLockException e) {
+      // The mirror of the case deleteAllKeysUnderLock() handles: a purgeAll() or shutdown-hook teardown on another
+      // thread of this JVM already holds this key's lock. Blocking is impossible (FileLock is JVM-scoped), and
+      // building into a directory that is being deleted is exactly the corruption this lock exists to prevent, so
+      // fail with a message that names the cause instead of the bare IllegalStateException the JDK throws.
+      throw new IllegalStateException(
+          "Cannot build fixture " + key + ": another thread in this JVM is purging or destroying the fixture "
+              + "directory. Do not call purgeAll() concurrently with a fixture build.", e);
+    } catch (IOException e) {
+      throw new RuntimeException("Failed to acquire cross-process lock for " + key, e);
     }
-    return build(overlap, numSegments, rowsPerSegment, keyCardinality, key, outDir);
+  }
+
+  /// The cross-process lock file for `key`: a sibling of `outDir`, never inside it, and never deleted on release
+  /// (see class javadoc and [#loadOrBuild]). `baseDir()` must exist before this is opened, since `FileChannel.open`
+  /// does not create parent directories.
+  private static File lockFile(String key) {
+    File base = baseDir();
+    if (!base.isDirectory() && !base.mkdirs() && !base.isDirectory()) {
+      throw new RuntimeException("Failed to create fixture base directory " + base);
+    }
+    return new File(base, key + ".lock");
   }
 
   /// Attempts to load a pre-existing on-disk fixture for `key`. Returns `null` -- after loudly logging why, and
@@ -478,7 +541,7 @@ public final class SortedMergeFixture {
     boolean keep = !"false".equalsIgnoreCase(System.getProperty(KEEP_PROPERTY));
     if (!keep) {
       System.out.printf("[arm4] deleting on-disk fixture at %s because -D%s=false%n", baseDir(), KEEP_PROPERTY);
-      FileUtils.deleteQuietly(baseDir());
+      deleteAllKeysUnderLock();
     }
   }
 
@@ -494,6 +557,39 @@ public final class SortedMergeFixture {
     SEGMENT_CACHE.clear();
     DEPTH_CACHE.clear();
     System.out.printf("[arm4] purging on-disk fixture at %s%n", baseDir());
-    FileUtils.deleteQuietly(baseDir());
+    deleteAllKeysUnderLock();
+  }
+
+  /// Deletes every key's on-disk directory under {@link #baseDir()}, but never a `.lock` file, and never a key's
+  /// directory without first holding that key's lock. Used by [#destroyAll()] and [#purgeAll()] instead of a bare
+  /// `FileUtils.deleteQuietly(baseDir())`, which -- now that [#loadOrBuild] serializes on a per-key lock -- would
+  /// otherwise let one process wipe a directory that another process's [#loadOrBuild] is actively validating or
+  /// building, exactly the cross-process race this class's locking exists to prevent. Lock files themselves are
+  /// never deleted, for the same orphaned-inode reason [#loadOrBuild] never deletes them on release.
+  private static void deleteAllKeysUnderLock() {
+    File base = baseDir();
+    File[] entries = base.listFiles();
+    if (entries == null) {
+      return;
+    }
+    for (File entry : entries) {
+      if (entry.getName().endsWith(".lock")) {
+        continue;
+      }
+      try (FileChannel lockChannel = FileChannel.open(lockFile(entry.getName()).toPath(), StandardOpenOption.CREATE,
+          StandardOpenOption.WRITE);
+          FileLock lock = lockChannel.lock()) {
+        FileUtils.deleteQuietly(entry);
+      } catch (OverlappingFileLockException e) {
+        // Another thread in THIS JVM holds the key's lock, which means loadOrBuild is mid-validation or mid-build on
+        // it. FileLock is JVM-scoped, so that collision throws here rather than blocking, and it is not an IOException
+        // so it would otherwise escape uncaught -- out of a shutdown hook, aborting the loop and leaving the
+        // remaining keys unexamined. Skipping is also the correct outcome on its merits: a directory being built is
+        // exactly what must not be deleted.
+        System.out.printf("[arm4] not deleting %s: another thread in this JVM is building it%n", entry);
+      } catch (IOException e) {
+        throw new RuntimeException("Failed to acquire lock while deleting fixture entry " + entry, e);
+      }
+    }
   }
 }
