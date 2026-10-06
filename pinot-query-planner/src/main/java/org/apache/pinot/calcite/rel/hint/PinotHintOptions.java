@@ -18,10 +18,12 @@
  */
 package org.apache.pinot.calcite.rel.hint;
 
+import com.google.common.base.Preconditions;
 import java.util.List;
 import java.util.Map;
 import javax.annotation.Nullable;
 import org.apache.calcite.rel.core.Join;
+import org.apache.calcite.rel.core.JoinRelType;
 import org.apache.calcite.rel.core.Window;
 import org.apache.calcite.rel.hint.RelHint;
 
@@ -126,6 +128,8 @@ public class PinotHintOptions {
     public static final String DYNAMIC_BROADCAST_JOIN_STRATEGY = "dynamic_broadcast";
     // "lookup" can be used when the right table is a dimension table replicated to all workers
     public static final String LOOKUP_JOIN_STRATEGY = "lookup";
+    // "sorted" performs a streaming sorted merge join; both inputs must be pre-sorted on the join keys
+    public static final String SORTED_MERGE_JOIN_STRATEGY = "sorted";
 
     public static final String LEFT_DISTRIBUTION_TYPE = "left_distribution_type";
     public static final String RIGHT_DISTRIBUTION_TYPE = "right_distribution_type";
@@ -157,6 +161,35 @@ public class PinotHintOptions {
     // TODO: Consider adding a Join implementation with join strategy.
     public static boolean useLookupJoinStrategy(Join join) {
       return LOOKUP_JOIN_STRATEGY.equalsIgnoreCase(getJoinStrategyHint(join));
+    }
+
+    /// Whether the join uses the sorted merge join strategy. The single predicate shared by the exchange insert rule
+    /// and the plan node converters, so they always agree.
+    ///
+    /// The hint is scoped to a query block, so it also reaches joins the user did not write: the SEMI/ANTI joins that
+    /// `IN`/`EXISTS` subqueries become, and ASOF joins. The sorted merge join has no semantics for them, so for those
+    /// join types the hint is not applicable and the join keeps the default hash strategy. Only INNER, LEFT, RIGHT and
+    /// FULL joins, which a user can request explicitly, count as asking for the sorted strategy; RIGHT and FULL are
+    /// then rejected with a clear error by [#checkSortedMergeJoinType] instead of being silently planned as hash joins.
+    public static boolean useSortedMergeJoinStrategy(Join join) {
+      if (!SORTED_MERGE_JOIN_STRATEGY.equalsIgnoreCase(getJoinStrategyHint(join))) {
+        return false;
+      }
+      switch (join.getJoinType()) {
+        case INNER:
+        case LEFT:
+        case RIGHT:
+        case FULL:
+          return true;
+        default:
+          return false;
+      }
+    }
+
+    /// Rejects the explicitly requested join types the sorted merge join operator does not implement.
+    public static void checkSortedMergeJoinType(JoinRelType joinType) {
+      Preconditions.checkArgument(joinType == JoinRelType.INNER || joinType == JoinRelType.LEFT,
+          "Sorted merge join (join_strategy='sorted') only supports INNER and LEFT joins, got: %s", joinType);
     }
 
     @Nullable

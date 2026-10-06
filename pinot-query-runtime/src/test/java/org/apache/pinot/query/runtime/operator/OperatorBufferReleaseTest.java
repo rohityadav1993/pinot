@@ -273,6 +273,37 @@ public class OperatorBufferReleaseTest {
     assertFalse(operator.hasBufferedState());
   }
 
+  /// The sorted merge join buffers the run of right rows sharing the current key and reuses it across keys, so it is
+  /// still holding that run when a block is handed downstream.
+  @Test
+  public void shouldReleaseSortedMergeJoinRightRunOnCancel() {
+    givenSortedInputsSharingOneKey();
+    SortedMergeJoinOperator operator = sortedMergeJoinOperator();
+
+    assertTrue(operator.nextBlock().isData());
+    assertTrue(operator.hasBufferedState(), "the right run is still buffered mid-merge");
+
+    operator.cancel(ERROR);
+
+    assertFalse(operator.hasBufferedState());
+  }
+
+  /// When the right side fails, the left cursor is still pointing at the block it fetched before the error. The
+  /// operator releases it on the error block itself instead of waiting for close().
+  @Test
+  public void shouldReleaseSortedMergeJoinCursorsOnError() {
+    when(_leftInput.nextBlock()).thenReturn(OperatorTestUtil.block(SCHEMA, new Object[]{1, "a"}));
+    when(_rightInput.nextBlock()).thenReturn(ErrorMseBlock.fromException(ERROR));
+    SortedMergeJoinOperator operator = sortedMergeJoinOperator();
+
+    assertTrue(operator.nextBlock().isError());
+    assertFalse(operator.hasBufferedState(), "the error block must release the left cursor's block");
+
+    operator.close();
+
+    assertFalse(operator.hasBufferedState());
+  }
+
   @Test
   public void shouldReleaseNonEquiJoinRightTableOnCancel() {
     givenRightBuiltThenLeftKeepsFlowing();
@@ -432,6 +463,7 @@ public class OperatorBufferReleaseTest {
       assertReleasedByEitherPath(cancelFirst, this::hashJoinHoldingRightTable);
       assertReleasedByEitherPath(cancelFirst, this::nonEquiJoinHoldingRightTable);
       assertReleasedByEitherPath(cancelFirst, this::asofJoinHoldingRightTable);
+      assertReleasedByEitherPath(cancelFirst, this::sortedMergeJoinHoldingRightRun);
       assertReleasedByEitherPath(cancelFirst, this::aggregateHoldingGroupByExecutor);
       assertReleasedByEitherPath(cancelFirst, this::repeatHoldingCurrentRows);
     }
@@ -483,6 +515,14 @@ public class OperatorBufferReleaseTest {
     resetMocks();
     givenRightBuiltThenLeftKeepsFlowing();
     HashJoinOperator operator = hashJoinOperator();
+    operator.nextBlock();
+    return operator;
+  }
+
+  private MultiStageOperator sortedMergeJoinHoldingRightRun() {
+    resetMocks();
+    givenSortedInputsSharingOneKey();
+    SortedMergeJoinOperator operator = sortedMergeJoinOperator();
     operator.nextBlock();
     return operator;
   }
@@ -541,6 +581,30 @@ public class OperatorBufferReleaseTest {
   private void givenRightSideFails() {
     when(_rightInput.nextBlock()).thenReturn(OperatorTestUtil.block(SCHEMA, new Object[]{1, "a"}))
         .thenReturn(ErrorMseBlock.fromException(ERROR));
+  }
+
+  /// Both sides sorted on int_col and sharing one join key. 40x30 rows cross-join to 1200, overshooting the
+  /// operator's 1024-row target block, so the merge returns a full block with the right run still buffered and no
+  /// EOS reached - the mid-flight state cancel has to clean up.
+  private void givenSortedInputsSharingOneKey() {
+    when(_leftInput.nextBlock()).thenReturn(OperatorTestUtil.block(SCHEMA, sameKeyRows(40, "l")))
+        .thenReturn(SuccessMseBlock.INSTANCE);
+    when(_rightInput.nextBlock()).thenReturn(OperatorTestUtil.block(SCHEMA, sameKeyRows(30, "r")))
+        .thenReturn(SuccessMseBlock.INSTANCE);
+  }
+
+  private static Object[][] sameKeyRows(int numRows, String prefix) {
+    Object[][] rows = new Object[numRows][];
+    for (int i = 0; i < numRows; i++) {
+      rows[i] = new Object[]{1, prefix + i};
+    }
+    return rows;
+  }
+
+  private SortedMergeJoinOperator sortedMergeJoinOperator() {
+    return new SortedMergeJoinOperator(OperatorTestUtil.getTracingContext(), _leftInput, SCHEMA, _rightInput,
+        new JoinNode(-1, JOIN_RESULT_SCHEMA, PlanNode.NodeHint.EMPTY, List.of(), JoinRelType.INNER, List.of(0),
+            List.of(0), List.of(), JoinNode.JoinStrategy.SORTED));
   }
 
   private HashJoinOperator hashJoinOperator() {

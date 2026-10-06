@@ -75,10 +75,10 @@ public class ExchangeNode extends BasePlanNode {
   }
 
   public static ExchangeNode kWayMerge(int stageId, DataSchema schema, List<PlanNode> inputs,
-      RelDistribution.Type distribution, @Nullable List<Integer> keys, List<RelFieldCollation> collations,
-      String hashFunction) {
-    return new ExchangeNode(stageId, schema, inputs, PinotRelExchangeType.STREAMING, distribution, keys, false,
-        collations, false, false, null, null, hashFunction, true);
+      RelDistribution.Type distribution, @Nullable List<Integer> keys, boolean prePartitioned,
+      List<RelFieldCollation> collations, String hashFunction) {
+    return new ExchangeNode(stageId, schema, inputs, PinotRelExchangeType.STREAMING, distribution, keys,
+        prePartitioned, collations, false, false, null, null, hashFunction, true);
   }
 
   public boolean isKWayMerge() {

@@ -31,6 +31,8 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 import org.apache.calcite.rel.RelDistribution;
+import org.apache.calcite.rel.RelFieldCollation;
+import org.apache.calcite.rel.core.JoinRelType;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.sql.type.SqlTypeName;
 import org.apache.pinot.query.QueryEnvironment.CompiledQuery;
@@ -50,7 +52,9 @@ import org.apache.pinot.query.planner.plannode.ProjectNode;
 import org.apache.pinot.query.planner.plannode.SetOpNode;
 import org.apache.pinot.query.planner.plannode.SortNode;
 import org.apache.pinot.query.planner.plannode.WindowNode;
+import org.apache.pinot.query.routing.MailboxInfos;
 import org.apache.pinot.query.routing.QueryServerInstance;
+import org.apache.pinot.query.routing.WorkerMetadata;
 import org.apache.pinot.spi.exception.QueryErrorCode;
 import org.apache.pinot.spi.exception.QueryException;
 import org.apache.pinot.spi.utils.CommonConstants.Broker.Request.QueryOptionKey;
@@ -1398,6 +1402,293 @@ public class QueryCompilationTest extends QueryEnvironmentTestBase {
     MailboxReceiveNode receiveNode = (MailboxReceiveNode) sortNode.getInputs().get(0);
     return receiveNode.getDistributionType() == RelDistribution.Type.HASH_DISTRIBUTED
         && !receiveNode.getKeys().isEmpty();
+  }
+
+  private static final String SORTED_JOIN_HINT = "join_strategy='sorted'";
+
+  private static QueryEnvironment mergeSupportedEnvironment() {
+    return getQueryEnvironment(3, 1, 2, TABLE_SCHEMAS, SERVER1_SEGMENTS, SERVER2_SEGMENTS, PARTITIONED_SEGMENTS_MAP,
+        true);
+  }
+
+  private static DispatchableSubPlan plan(QueryEnvironment env, String query) {
+    try (CompiledQuery compiledQuery = env.compile(query)) {
+      return compiledQuery.planQuery(0).getQueryPlan();
+    }
+  }
+
+  /// With the k-way merge available, each sorted merge join input is a merge receive whose sender fragment sorts the
+  /// rows on the join keys (ASC NULLS LAST) with an unbounded explicit Sort, and nothing is sorted above the receive.
+  @Test
+  public void testSortedMergeJoinUsesKWayMergeExchange() {
+    String query = "SELECT /*+ joinOptions(" + SORTED_JOIN_HINT + ") */ a.col2, b.col1 FROM a JOIN b "
+        + "ON a.col2 = b.col1";
+    DispatchableSubPlan plan = plan(mergeSupportedEnvironment(), query);
+    JoinNode join = findJoinNode(plan);
+    assertEquals(join.getJoinStrategy(), JoinNode.JoinStrategy.SORTED);
+    assertEquals(join.getInputs().size(), 2);
+    for (PlanNode input : join.getInputs()) {
+      assertTrue(input instanceof MailboxMergeReceiveNode, "Join input must be a merge receive, got: " + input);
+      MailboxMergeReceiveNode receive = (MailboxMergeReceiveNode) input;
+      assertEquals(receive.getDistributionType(), RelDistribution.Type.HASH_DISTRIBUTED);
+      assertEquals(receive.getCollations().size(), 1);
+      assertEquals(receive.getCollations().get(0).direction, RelFieldCollation.Direction.ASCENDING);
+      assertEquals(receive.getCollations().get(0).nullDirection, RelFieldCollation.NullDirection.LAST);
+
+      MailboxSendNode send = receive.getSender();
+      // Deprecated on purpose: checks that the legacy sender ordering flag stays unset on the merge path.
+      assertFalse(send.isSort());
+      assertTrue(send.getInputs().get(0) instanceof SortNode, "Sender fragment must sort explicitly");
+      SortNode sort = (SortNode) send.getInputs().get(0);
+      assertEquals(sort.getCollations(), receive.getCollations());
+      assertEquals(sort.getFetch(), Integer.MAX_VALUE, "The sender sort must be unbounded");
+      assertTrue(sort.isSingleRunRequired());
+      assertEquals(sort.getOffset(), -1);
+    }
+  }
+
+  /// Without the k-way merge (version gate off), the join input is a plain hash exchange followed by an unbounded Sort
+  /// above the receive, so the join still sees input sorted on its keys within each worker.
+  @Test
+  public void testSortedMergeJoinFallsBackToPlainExchangeAndSortWhenMergeUnsupported() {
+    String query = "SELECT /*+ joinOptions(" + SORTED_JOIN_HINT + ") */ a.col2, b.col1 FROM a JOIN b "
+        + "ON a.col2 = b.col1";
+    DispatchableSubPlan plan = plan(_queryEnvironment, query);
+    JoinNode join = findJoinNode(plan);
+    assertEquals(join.getJoinStrategy(), JoinNode.JoinStrategy.SORTED);
+    assertEquals(join.getInputs().size(), 2);
+    for (PlanNode input : join.getInputs()) {
+      assertTrue(input instanceof SortNode, "Join input must be a Sort above the receive, got: " + input);
+      SortNode sort = (SortNode) input;
+      assertEquals(sort.getFetch(), Integer.MAX_VALUE, "The receiver sort must be unbounded");
+      assertEquals(sort.getOffset(), -1);
+      assertEquals(sort.getCollations().size(), 1);
+      assertEquals(sort.getCollations().get(0).direction, RelFieldCollation.Direction.ASCENDING);
+      assertEquals(sort.getCollations().get(0).nullDirection, RelFieldCollation.NullDirection.LAST);
+      PlanNode receive = sort.getInputs().get(0);
+      assertTrue(receive instanceof MailboxReceiveNode, "Old workers cannot read the merge receive node");
+      // Deprecated on purpose: checks that the legacy sender ordering marker stays unset on the fallback path.
+      assertFalse(((MailboxReceiveNode) receive).isSortedOnSender());
+      assertFalse(((MailboxReceiveNode) receive).getSender().getInputs().get(0) instanceof SortNode,
+          "The fallback must not sort on the sender");
+    }
+  }
+
+  /// Tests that a sorted merge join with the `is_colocated_by_join_keys='true'` hint marks the exchange as
+  /// pre-partitioned when the join keys match the table partition keys, so the colocation machinery can eliminate the
+  /// redundant all-to-all shuffle. Tables `a` and `b` are partitioned on `col2` and `col1` respectively, which are the
+  /// join keys here. Covers both the merge exchange and the gate-off plain exchange.
+  @Test
+  public void testColocatedSortedMergeJoinIsPrePartitioned() {
+    String query = "SELECT /*+ joinOptions(" + SORTED_JOIN_HINT + ", is_colocated_by_join_keys='true') */ "
+        + "a.col2, b.col1 FROM a JOIN b ON a.col2 = b.col1";
+    for (QueryEnvironment env : List.of(mergeSupportedEnvironment(), _queryEnvironment)) {
+      DispatchableSubPlan dispatchableSubPlan = plan(env, query);
+      List<MailboxSendNode> joinInputSends = findJoinInputSends(dispatchableSubPlan);
+      assertEquals(joinInputSends.size(), 2, "Sorted merge join should have two join-input sends");
+      for (MailboxSendNode sendNode : joinInputSends) {
+        assertTrue(sendNode.isPrePartitioned(),
+            "Colocated sorted merge join input send should be pre-partitioned");
+      }
+    }
+  }
+
+  /// Colocated sorted join over a merge exchange: the exchange is a direct 1:1 merge receive.
+  @Test
+  public void testColocatedSortedMergeJoinMergeReceiveIsDirect() {
+    String query = "SELECT /*+ joinOptions(" + SORTED_JOIN_HINT + ", is_colocated_by_join_keys='true') */ "
+        + "a.col2, b.col1 FROM a /*+ tableOptions(partition_function='hashcode', partition_key='col2', "
+        + "partition_size='4') */ JOIN b /*+ tableOptions(partition_function='hashcode', partition_key='col1', "
+        + "partition_size='4') */ ON a.col2 = b.col1";
+    DispatchableSubPlan plan = plan(mergeSupportedEnvironment(), query);
+    DispatchablePlanFragment joinStage = findJoinStage(plan);
+    for (PlanNode input : findJoinNode(plan).getInputs()) {
+      assertTrue(input instanceof MailboxMergeReceiveNode);
+      int senderStageId = ((MailboxMergeReceiveNode) input).getSenderStageId();
+      // Direct exchange: every receiver worker reads from exactly one sender worker.
+      for (WorkerMetadata workerMetadata : joinStage.getWorkerMetadataList()) {
+        MailboxInfos mailboxInfos = workerMetadata.getMailboxInfosMap().get(senderStageId);
+        assertEquals(mailboxInfos.getMailboxInfos().size(), 1);
+        assertEquals(mailboxInfos.getMailboxInfos().get(0).getWorkerIds().size(), 1,
+            "A pre-partitioned merge receive must read from a single sender worker");
+      }
+    }
+  }
+
+  /// Tests that a sorted merge join WITHOUT the `is_colocated_by_join_keys='true'` hint does not mark the exchange as
+  /// pre-partitioned, so the all-to-all shuffle is retained.
+  @Test
+  public void testNonColocatedSortedMergeJoinIsNotPrePartitioned() {
+    String query = "SELECT /*+ joinOptions(" + SORTED_JOIN_HINT + ") */ "
+        + "a.col2, b.col1 FROM a JOIN b ON a.col2 = b.col1";
+    for (QueryEnvironment env : List.of(mergeSupportedEnvironment(), _queryEnvironment)) {
+      DispatchableSubPlan dispatchableSubPlan = plan(env, query);
+      List<MailboxSendNode> joinInputSends = findJoinInputSends(dispatchableSubPlan);
+      assertEquals(joinInputSends.size(), 2, "Sorted merge join should have two join-input sends");
+      for (MailboxSendNode sendNode : joinInputSends) {
+        assertFalse(sendNode.isPrePartitioned(),
+            "Non-colocated sorted merge join input send should not be pre-partitioned");
+      }
+    }
+  }
+
+  /// The sorted join supports INNER and LEFT only; other join types are rejected at planning time.
+  @Test
+  public void testSortedMergeJoinSupportedJoinTypes() {
+    for (QueryEnvironment env : List.of(mergeSupportedEnvironment(), _queryEnvironment)) {
+      for (String joinType : List.of("JOIN", "INNER JOIN", "LEFT JOIN")) {
+        String query = "SELECT /*+ joinOptions(" + SORTED_JOIN_HINT + ") */ a.col2, b.col1 FROM a " + joinType
+            + " b ON a.col2 = b.col1";
+        assertEquals(findJoinNode(plan(env, query)).getJoinStrategy(), JoinNode.JoinStrategy.SORTED, joinType);
+      }
+      for (String joinType : List.of("RIGHT JOIN", "FULL JOIN")) {
+        String query = "SELECT /*+ joinOptions(" + SORTED_JOIN_HINT + ") */ a.col2, b.col1 FROM a " + joinType
+            + " b ON a.col2 = b.col1";
+        Exception e = expectThrows(Exception.class, () -> plan(env, query));
+        assertTrue(Throwables.getStackTraceAsString(e).contains("only supports INNER and LEFT"), joinType);
+      }
+    }
+  }
+
+  /// A user subquery `ORDER BY k LIMIT 2147483647` becomes a Sort over a sort exchange with fetch `Integer.MAX_VALUE`,
+  /// which the gate-off re-fire guard must not mistake for its own output: the join still has to get its exchanges.
+  @Test
+  public void testSortedMergeJoinOverUserUnboundedLimitSubquery() {
+    String left = "(SELECT col2, col3 FROM a ORDER BY col2 LIMIT 2147483647) x";
+    String right = "(SELECT col1, col3 FROM b ORDER BY col1 LIMIT 2147483647) y";
+    for (String query : List.of(
+        "SELECT /*+ joinOptions(" + SORTED_JOIN_HINT + ") */ x.col2, y.col1 FROM " + left + " JOIN " + right
+            + " ON x.col2 = y.col1",
+        "SELECT /*+ joinOptions(" + SORTED_JOIN_HINT + ") */ x.col2, b.col1 FROM " + left + " JOIN b "
+            + "ON x.col2 = b.col1",
+        "SELECT /*+ joinOptions(" + SORTED_JOIN_HINT + ") */ a.col2, y.col1 FROM a JOIN " + right
+            + " ON a.col2 = y.col1")) {
+      JoinNode merge = findJoinNode(plan(mergeSupportedEnvironment(), query));
+      assertEquals(merge.getJoinStrategy(), JoinNode.JoinStrategy.SORTED);
+      for (PlanNode input : merge.getInputs()) {
+        assertTrue(input instanceof MailboxMergeReceiveNode, "Gate on: expected merge receive, got: " + input);
+        assertEquals(((MailboxMergeReceiveNode) input).getDistributionType(), RelDistribution.Type.HASH_DISTRIBUTED);
+      }
+      JoinNode fallback = findJoinNode(plan(_queryEnvironment, query));
+      assertEquals(fallback.getJoinStrategy(), JoinNode.JoinStrategy.SORTED);
+      for (PlanNode input : fallback.getInputs()) {
+        assertTrue(input instanceof SortNode, "Gate off: expected Sort above the receive, got: " + input);
+        PlanNode receive = input.getInputs().get(0);
+        assertTrue(receive instanceof MailboxReceiveNode);
+        assertEquals(((MailboxReceiveNode) receive).getDistributionType(), RelDistribution.Type.HASH_DISTRIBUTED,
+            "The join input exchange must hash on the join keys");
+      }
+    }
+  }
+
+  /// `a.x = b.y AND a.x = b.z` can leave a repeated join key (`[x, x]`); a collation lists each field once, so the sort
+  /// is on the distinct key columns. The join keys themselves are unchanged. An INNER join derives the implied
+  /// `b.y = b.z` and pushes it below the join, so only the LEFT join keeps the repeated key on the preserved side.
+  @Test
+  public void testSortedMergeJoinWithDuplicateKeyColumns() {
+    int casesWithDuplicates = 0;
+    for (String joinType : List.of("JOIN", "LEFT JOIN")) {
+      for (String condition : List.of("a.col1 = b.col1 AND a.col1 = b.col2", "a.col1 = b.col1 AND a.col2 = b.col1")) {
+        String query = "SELECT /*+ joinOptions(" + SORTED_JOIN_HINT + ") */ a.col1, b.col1 FROM a " + joinType
+            + " b ON " + condition;
+        String description = joinType + " " + condition;
+        JoinNode merge = findJoinNode(plan(mergeSupportedEnvironment(), query));
+        assertEquals(merge.getJoinStrategy(), JoinNode.JoinStrategy.SORTED, description);
+        JoinNode fallback = findJoinNode(plan(_queryEnvironment, query));
+        assertEquals(fallback.getJoinStrategy(), JoinNode.JoinStrategy.SORTED, description);
+        for (int i = 0; i < 2; i++) {
+          List<Integer> keys = i == 0 ? merge.getLeftKeys() : merge.getRightKeys();
+          int distinctKeys = (int) keys.stream().distinct().count();
+          if (distinctKeys < keys.size()) {
+            casesWithDuplicates++;
+          }
+          assertEquals(((MailboxMergeReceiveNode) merge.getInputs().get(i)).getCollations().size(), distinctKeys,
+              description);
+          assertEquals(((SortNode) fallback.getInputs().get(i)).getCollations().size(), distinctKeys, description);
+        }
+      }
+    }
+    assertTrue(casesWithDuplicates > 0, "No query produced a repeated join key; the test no longer covers the case");
+  }
+
+  /// The hint is query-block scoped, so it reaches SEMI joins from `IN (subquery)` and ASOF joins the user did not ask
+  /// to be sorted merge joins. It is not applicable to them: they keep their own strategy and do not fail.
+  @Test
+  public void testSortedMergeJoinHintIsIgnoredForSemiAndAsofJoins() {
+    String semi = "SELECT /*+ joinOptions(" + SORTED_JOIN_HINT + ") */ col1 FROM a WHERE col2 IN "
+        + "(SELECT col1 FROM b)";
+    String asof = "SELECT /*+ joinOptions(" + SORTED_JOIN_HINT + ") */ a.col1, b.col1 FROM a ASOF JOIN b "
+        + "MATCH_CONDITION(a.ts > b.ts) ON a.col2 = b.col2";
+    for (QueryEnvironment env : List.of(mergeSupportedEnvironment(), _queryEnvironment)) {
+      JoinNode semiJoin = findJoinNode(plan(env, semi));
+      assertEquals(semiJoin.getJoinType(), JoinRelType.SEMI);
+      assertEquals(semiJoin.getJoinStrategy(), JoinNode.JoinStrategy.HASH);
+      for (PlanNode input : semiJoin.getInputs()) {
+        assertTrue(input instanceof MailboxReceiveNode, "A SEMI join must get plain hash exchanges, got: " + input);
+      }
+      JoinNode asofJoin = findJoinNode(plan(env, asof));
+      assertEquals(asofJoin.getJoinStrategy(), JoinNode.JoinStrategy.ASOF);
+      for (PlanNode input : asofJoin.getInputs()) {
+        assertTrue(input instanceof MailboxReceiveNode, "An ASOF join must not get a sorted exchange, got: " + input);
+      }
+    }
+  }
+
+  /// Without any colocation hint, a sorted join over inputs already partitioned on the join keys detects the
+  /// pre-partitioning on its own, as the hash join does: the Sort under the merge exchange carries its input's
+  /// distribution.
+  @Test
+  public void testSortedMergeJoinAutoDetectsPrePartitionedInput() {
+    String query = "SELECT /*+ joinOptions(" + SORTED_JOIN_HINT + ") */ "
+        + "a.col2, b.col1 FROM a /*+ tableOptions(partition_function='hashcode', partition_key='col2', "
+        + "partition_size='4') */ JOIN b /*+ tableOptions(partition_function='hashcode', partition_key='col1', "
+        + "partition_size='4') */ ON a.col2 = b.col1";
+    for (MailboxSendNode send : findJoinInputSends(plan(mergeSupportedEnvironment(), query))) {
+      assertTrue(send.isPrePartitioned(), "Partitioned inputs must be detected as pre-partitioned");
+    }
+  }
+
+  /// A sorted join needs equi keys and the default hash distribution; both are rejected rather than ignored.
+  @Test
+  public void testSortedMergeJoinRejectsInvalidShapes() {
+    Exception e = expectThrows(Exception.class, () -> plan(_queryEnvironment,
+        "SELECT /*+ joinOptions(" + SORTED_JOIN_HINT + ") */ a.col2, b.col1 FROM a JOIN b ON a.col2 > b.col1"));
+    assertTrue(Throwables.getStackTraceAsString(e).contains("equi-join keys"));
+    e = expectThrows(Exception.class, () -> plan(_queryEnvironment,
+        "SELECT /*+ joinOptions(" + SORTED_JOIN_HINT + ", right_distribution_type='broadcast') */ a.col2, b.col1 "
+            + "FROM a JOIN b ON a.col2 = b.col1"));
+    assertTrue(Throwables.getStackTraceAsString(e).contains("Distribution type hints are not supported"));
+  }
+
+  /// The physical optimizer cannot guarantee sorted inputs yet; it must fail deterministically instead of feeding an
+  /// unsorted input to the sorted join operator.
+  @Test
+  public void testSortedMergeJoinIsRejectedByPhysicalOptimizer() {
+    String query = "SET usePhysicalOptimizer=true; SELECT /*+ joinOptions(" + SORTED_JOIN_HINT
+        + ") */ a.col2, b.col1 FROM a JOIN b ON a.col2 = b.col1";
+    Exception e = expectThrows(Exception.class, () -> plan(_queryEnvironment, query));
+    assertTrue(Throwables.getStackTraceAsString(e).contains("not yet supported with the physical optimizer"));
+  }
+
+  /// Finds the [MailboxSendNode] fragment roots that feed into the join stage (i.e. the two join-input sends).
+  private List<MailboxSendNode> findJoinInputSends(DispatchableSubPlan dispatchableSubPlan) {
+    DispatchablePlanFragment joinStage = findJoinStage(dispatchableSubPlan);
+    assertNotNull(joinStage, "Should have a join stage");
+    int joinStageId = joinStage.getPlanFragment().getFragmentId();
+    List<MailboxSendNode> sends = new ArrayList<>();
+    for (DispatchablePlanFragment fragment : dispatchableSubPlan.getQueryStages()) {
+      PlanNode root = fragment.getPlanFragment().getFragmentRoot();
+      if (root instanceof MailboxSendNode) {
+        MailboxSendNode sendNode = (MailboxSendNode) root;
+        for (int receiverStageId : sendNode.getReceiverStageIds()) {
+          if (receiverStageId == joinStageId) {
+            sends.add(sendNode);
+            break;
+          }
+        }
+      }
+    }
+    return sends;
   }
 
   /// Tests that FULL OUTER JOIN with only non-equi conditions uses a singleton worker for the join stage, to ensure

@@ -18,6 +18,7 @@
  */
 package org.apache.pinot.calcite.rel.logical;
 
+import javax.annotation.Nullable;
 import org.apache.calcite.plan.Convention;
 import org.apache.calcite.plan.RelOptCluster;
 import org.apache.calcite.plan.RelTraitSet;
@@ -26,27 +27,53 @@ import org.apache.calcite.rel.RelCollationTraitDef;
 import org.apache.calcite.rel.RelDistribution;
 import org.apache.calcite.rel.RelDistributionTraitDef;
 import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.rel.RelWriter;
 import org.apache.calcite.rel.core.SortExchange;
 
 
 /// Exchanges already sorted streams and preserves their collation with a k-way merge at the receiver.
 /// The logical plan must establish the input ordering. This immutable node does not sort its input.
 public class PinotKWayMergeSortExchange extends SortExchange {
+  // Overrides the partitioning info calculated from the distribution trait, like PinotLogicalExchange. When true, each
+  // receiver reads from a single sender (direct exchange) and no data shuffle is needed.
+  @Nullable
+  private final Boolean _prePartitioned;
+
   private PinotKWayMergeSortExchange(RelOptCluster cluster, RelTraitSet traits, RelNode input,
-      RelDistribution distribution, RelCollation collation) {
+      RelDistribution distribution, RelCollation collation, @Nullable Boolean prePartitioned) {
     super(cluster, traits, input, distribution, collation);
+    _prePartitioned = prePartitioned;
   }
 
   public static PinotKWayMergeSortExchange create(RelNode input, RelDistribution distribution, RelCollation collation) {
+    return create(input, distribution, collation, null);
+  }
+
+  public static PinotKWayMergeSortExchange create(RelNode input, RelDistribution distribution, RelCollation collation,
+      @Nullable Boolean prePartitioned) {
     collation = RelCollationTraitDef.INSTANCE.canonize(collation);
     distribution = RelDistributionTraitDef.INSTANCE.canonize(distribution);
     return new PinotKWayMergeSortExchange(input.getCluster(),
         input.getTraitSet().replace(Convention.NONE).replace(distribution).replace(collation), input, distribution,
-        collation);
+        collation, prePartitioned);
   }
 
   @Override
   public SortExchange copy(RelTraitSet traits, RelNode input, RelDistribution distribution, RelCollation collation) {
-    return new PinotKWayMergeSortExchange(getCluster(), traits, input, distribution, collation);
+    return new PinotKWayMergeSortExchange(getCluster(), traits, input, distribution, collation, _prePartitioned);
+  }
+
+  @Override
+  public RelWriter explainTerms(RelWriter pw) {
+    RelWriter relWriter = super.explainTerms(pw);
+    if (_prePartitioned != null) {
+      relWriter.item("prePartitioned", _prePartitioned);
+    }
+    return relWriter;
+  }
+
+  @Nullable
+  public Boolean getPrePartitioned() {
+    return _prePartitioned;
   }
 }
