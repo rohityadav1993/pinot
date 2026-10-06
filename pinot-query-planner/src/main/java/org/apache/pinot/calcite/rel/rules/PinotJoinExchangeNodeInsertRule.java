@@ -20,12 +20,22 @@ package org.apache.pinot.calcite.rel.rules;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import javax.annotation.Nullable;
+import org.apache.calcite.plan.Context;
+import org.apache.calcite.plan.RelOptPlanner;
 import org.apache.calcite.plan.RelOptRule;
 import org.apache.calcite.plan.RelOptRuleCall;
+import org.apache.calcite.rel.RelCollation;
+import org.apache.calcite.rel.RelCollationTraitDef;
+import org.apache.calcite.rel.RelCollations;
+import org.apache.calcite.rel.RelDistribution;
 import org.apache.calcite.rel.RelDistributions;
+import org.apache.calcite.rel.RelFieldCollation;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.core.Calc;
 import org.apache.calcite.rel.core.Filter;
@@ -33,12 +43,18 @@ import org.apache.calcite.rel.core.Join;
 import org.apache.calcite.rel.core.JoinInfo;
 import org.apache.calcite.rel.core.JoinRelType;
 import org.apache.calcite.rel.core.Project;
+import org.apache.calcite.rel.core.Sort;
 import org.apache.calcite.rel.core.TableScan;
 import org.apache.calcite.rel.logical.LogicalAsofJoin;
+import org.apache.calcite.rel.logical.LogicalSort;
+import org.apache.calcite.rex.RexLiteral;
+import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.tools.RelBuilderFactory;
 import org.apache.pinot.calcite.rel.hint.PinotHintOptions;
 import org.apache.pinot.calcite.rel.hint.PinotHintStrategyTable;
+import org.apache.pinot.calcite.rel.logical.PinotKWayMergeSortExchange;
 import org.apache.pinot.calcite.rel.logical.PinotLogicalExchange;
+import org.apache.pinot.query.context.PlannerContext;
 
 
 /// Special rule for Pinot, this rule is fixed to always insert exchange after JOIN node.
@@ -53,7 +69,19 @@ public class PinotJoinExchangeNodeInsertRule extends RelOptRule {
   @Override
   public boolean matches(RelOptRuleCall call) {
     Join join = call.rel(0);
-    return !PinotRuleUtils.isExchange(join.getLeft()) && !PinotRuleUtils.isExchange(join.getRight());
+    if (PinotRuleUtils.isExchange(join.getLeft()) || PinotRuleUtils.isExchange(join.getRight())) {
+      return false;
+    }
+    // When the k-way merge is unavailable, the sorted merge join input is a Sort over the exchange (see
+    // createSortExchangeForMergeJoin). That exact shape on both sides means the join has already been processed;
+    // without this guard the rule would re-fire on its own output forever. The check is exact (collation, distribution
+    // keys and unbounded fetch), so a user subquery with ORDER BY ... LIMIT 2147483647 is not mistaken for it.
+    if (PinotHintOptions.JoinHintOptions.useSortedMergeJoinStrategy(join)) {
+      JoinInfo joinInfo = join.analyzeCondition();
+      return !(isMergeJoinFallbackInput(PinotRuleUtils.unboxRel(join.getLeft()), joinInfo.leftKeys)
+          && isMergeJoinFallbackInput(PinotRuleUtils.unboxRel(join.getRight()), joinInfo.rightKeys));
+    }
+    return true;
   }
 
   @Override
@@ -83,6 +111,19 @@ public class PinotJoinExchangeNodeInsertRule extends RelOptRule {
       Preconditions.checkArgument(rightDistributionType == null,
           "Right distribution type hint is not supported for lookup join");
       newRight = right;
+    } else if (PinotHintOptions.JoinHintOptions.useSortedMergeJoinStrategy(join)) {
+      Preconditions.checkArgument(!joinInfo.leftKeys.isEmpty(), "Sorted merge join requires equi-join keys");
+      PinotHintOptions.JoinHintOptions.checkSortedMergeJoinType(join.getJoinType());
+      // The merge join needs both inputs hash-distributed on the join keys so that matching keys meet on the same
+      // worker. A distribution type hint would silently break that (broadcast in particular), so reject it rather
+      // than ignore it, mirroring how the lookup join branch rejects a right distribution type hint.
+      Preconditions.checkArgument(leftDistributionType == null && rightDistributionType == null,
+          "Distribution type hints are not supported for sorted merge join");
+      // Force pre-partitioned exchange when colocated join hint is provided
+      Boolean prePartitioned = PinotHintOptions.JoinHintOptions.isColocatedByJoinKeys(join);
+      boolean mergeSupported = isKWayMergeSupported(call);
+      newLeft = createSortExchangeForMergeJoin(joinInfo.leftKeys, left, prePartitioned, mergeSupported);
+      newRight = createSortExchangeForMergeJoin(joinInfo.rightKeys, right, prePartitioned, mergeSupported);
     } else if (joinInfo.leftKeys.isEmpty() && join.getJoinType() == JoinRelType.FULL
         && leftDistributionType == null && rightDistributionType == null) {
       // FULL OUTER JOIN with no equi keys: use hash with empty key to explicitly route all data to one destination.
@@ -296,5 +337,74 @@ public class PinotJoinExchangeNodeInsertRule extends RelOptRule {
       default:
         throw new IllegalArgumentException("Unsupported distribution type: " + distributionType + " for hash join");
     }
+  }
+
+  /// Builds the input of a sorted merge join: hash-distributed on the join keys and sorted on them (ASC NULLS LAST)
+  /// within each worker, which is the contract of the sorted merge join operator.
+  ///
+  /// When the broker verified that every worker understands the merge receive node, each sender sorts its own rows and
+  /// the receiver merges the sorted streams, so the join input is never fully re-sorted. Otherwise (rolling upgrade or
+  /// rollback), a plain exchange is followed by a full sort on the receiving worker.
+  ///
+  /// The sort is unbounded: a missing fetch would let the sort operator apply the broker response limit and silently
+  /// drop rows, so it carries an explicit `Integer.MAX_VALUE` fetch.
+  private static RelNode createSortExchangeForMergeJoin(List<Integer> joinKeys, RelNode input,
+      @Nullable Boolean prePartitioned, boolean mergeSupported) {
+    RelCollation collation = getJoinKeyCollation(joinKeys);
+    RelDistribution distribution = RelDistributions.hash(joinKeys);
+    RexNode unbounded = input.getCluster().getRexBuilder().makeExactLiteral(BigDecimal.valueOf(Integer.MAX_VALUE));
+    if (mergeSupported) {
+      RelNode sortedInput = LogicalSort.create(input, collation, null, unbounded);
+      return PinotKWayMergeSortExchange.create(sortedInput, distribution, collation, prePartitioned);
+    }
+    PinotLogicalExchange exchange = PinotLogicalExchange.create(input, distribution, prePartitioned);
+    return LogicalSort.create(exchange, collation, null, unbounded);
+  }
+
+  /// ASC NULLS LAST collation on the distinct join key columns, in first-occurrence order. `ON a.x = b.y AND a.x = b.z`
+  /// yields left keys `[x, x]`, but a collation lists each field once. Ordering by the distinct columns is equivalent:
+  /// the operator compares tuples over all key columns in order, and a repeated column never changes the lexicographic
+  /// order (a tuple equal on the first occurrence is equal on the repeats).
+  private static RelCollation getJoinKeyCollation(List<Integer> joinKeys) {
+    List<RelFieldCollation> fieldCollations = new ArrayList<>(joinKeys.size());
+    for (int key : new LinkedHashSet<>(joinKeys)) {
+      fieldCollations.add(new RelFieldCollation(key, RelFieldCollation.Direction.ASCENDING,
+          RelFieldCollation.NullDirection.LAST));
+    }
+    return RelCollations.of(fieldCollations);
+  }
+
+  /// Whether the rel is exactly the gate-off input of [#createSortExchangeForMergeJoin]: an unbounded Sort (no offset,
+  /// `Integer.MAX_VALUE` fetch) on the join key collation over a plain [PinotLogicalExchange] hash distributed on the
+  /// join keys. User plans never have that shape: the sort exchange inserted under a user Sort is a
+  /// [org.apache.pinot.calcite.rel.logical.PinotLogicalSortExchange] hashed on no keys.
+  private static boolean isMergeJoinFallbackInput(RelNode rel, List<Integer> joinKeys) {
+    if (!(rel instanceof Sort)) {
+      return false;
+    }
+    Sort sort = (Sort) rel;
+    if (sort.offset != null || sort.fetch == null || RexLiteral.intValue(sort.fetch) != Integer.MAX_VALUE
+        || !sort.getCollation().equals(RelCollationTraitDef.INSTANCE.canonize(getJoinKeyCollation(joinKeys)))) {
+      return false;
+    }
+    RelNode input = PinotRuleUtils.unboxRel(sort.getInput());
+    return input instanceof PinotLogicalExchange && ((PinotLogicalExchange) input).getDistribution()
+        .equals(RelDistributions.hash(joinKeys));
+  }
+
+  /// Same lookup as the window rule: the broker puts the version-gate result in the [PlannerContext]. Defaults to
+  /// `false`, the safe plain exchange and sort shape, when no context is available.
+  private static boolean isKWayMergeSupported(RelOptRuleCall call) {
+    RelOptPlanner planner = call.getPlanner();
+    if (planner != null) {
+      Context context = planner.getContext();
+      if (context != null) {
+        PlannerContext plannerContext = context.unwrap(PlannerContext.class);
+        if (plannerContext != null) {
+          return plannerContext.getEnvConfig().isKWayMergeSupported();
+        }
+      }
+    }
+    return false;
   }
 }

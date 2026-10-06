@@ -588,7 +588,8 @@ public final class RelToPlanNodeConverter {
         _tracker.trackCreation(merge.getInput(), senderSort);
       }
       return ExchangeNode.kWayMerge(DEFAULT_STAGE_ID, toDataSchema(node.getRowType()), inputs, distributionType,
-          distribution.getKeys(), merge.getCollation().getFieldCollations(), _hashFunction);
+          distribution.getKeys(), resolvePrePartitioned(node, merge.getPrePartitioned()),
+          merge.getCollation().getFieldCollations(), _hashFunction);
     }
     if (node instanceof PinotLogicalSortExchange) {
       PinotLogicalSortExchange sortExchange = (PinotLogicalSortExchange) node;
@@ -611,17 +612,23 @@ public final class RelToPlanNodeConverter {
     if (keys.isEmpty()) {
       keys = null;
     }
-    if (prePartitioned == null) {
-      if (distributionType == RelDistribution.Type.HASH_DISTRIBUTED) {
-        RelDistribution inputDistributionTrait = node.getInputs().get(0).getTraitSet().getDistribution();
-        prePartitioned = distribution.equals(inputDistributionTrait);
-      } else {
-        prePartitioned = false;
-      }
-    }
+    prePartitioned = resolvePrePartitioned(node, prePartitioned);
     return new ExchangeNode(DEFAULT_STAGE_ID, toDataSchema(node.getRowType()), convertInputs(node.getInputs()),
         exchangeType, distributionType, keys, prePartitioned, collations, sortOnSender, sortOnReceiver, null, null,
         _hashFunction);
+  }
+
+  /// Returns the explicit pre-partitioned flag when set. Otherwise a HASH exchange is pre-partitioned when its input
+  /// already carries the same distribution.
+  private static boolean resolvePrePartitioned(Exchange node, @Nullable Boolean prePartitioned) {
+    if (prePartitioned != null) {
+      return prePartitioned;
+    }
+    RelDistribution distribution = node.getDistribution();
+    if (distribution.getType() == RelDistribution.Type.HASH_DISTRIBUTED) {
+      return distribution.equals(node.getInputs().get(0).getTraitSet().getDistribution());
+    }
+    return false;
   }
 
   private SetOpNode convertLogicalSetOp(SetOp node) {
@@ -983,6 +990,10 @@ public final class RelToPlanNodeConverter {
       Preconditions.checkState(projectInput instanceof TableScan,
           "Right input for lookup join must be a Project over TableScan, got Project over: %s",
           projectInput.getClass().getSimpleName());
+    } else if (PinotHintOptions.JoinHintOptions.useSortedMergeJoinStrategy(join)) {
+      Preconditions.checkArgument(!joinInfo.leftKeys.isEmpty(), "Sorted merge join requires equi-join keys");
+      PinotHintOptions.JoinHintOptions.checkSortedMergeJoinType(joinType);
+      joinStrategy = JoinNode.JoinStrategy.SORTED;
     } else {
       // TODO: Consider adding DYNAMIC_BROADCAST as a separate join strategy
       joinStrategy = JoinNode.JoinStrategy.HASH;

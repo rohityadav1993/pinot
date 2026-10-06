@@ -32,12 +32,14 @@ import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.core.Exchange;
 import org.apache.calcite.rel.core.Project;
 import org.apache.calcite.rel.core.SetOp;
+import org.apache.calcite.rel.core.Sort;
 import org.apache.calcite.rel.core.TableScan;
 import org.apache.calcite.rel.logical.LogicalFilter;
 import org.apache.calcite.rel.logical.LogicalJoin;
 import org.apache.calcite.rel.logical.LogicalProject;
 import org.apache.calcite.rel.logical.LogicalWindow;
 import org.apache.calcite.rel.type.RelDataTypeField;
+import org.apache.calcite.rex.RexLiteral;
 import org.apache.calcite.tools.RelBuilderFactory;
 import org.apache.calcite.util.mapping.IntPair;
 import org.apache.calcite.util.mapping.Mapping;
@@ -130,6 +132,18 @@ public class PinotRelDistributionTraitRule extends RelOptRule {
         // ... skip;
         LOGGER.warn("Failed to derive distribution from input for node: {}", node, e);
       }
+    } else if (node instanceof Sort && !(input instanceof Exchange) && isUnboundedSort((Sort) node)) {
+      // An unbounded Sort evaluated directly on its input (not after an exchange) neither moves, drops nor re-keys
+      // rows, so a keyed hash distribution survives it. The sorted merge join relies on this to let
+      // RelToPlanNodeConverter detect a pre-partitioned input below its sorted exchange. A Sort over an exchange and
+      // bounded sorts keep the default on purpose to keep this narrow. As a result, the sorted merge join's fallback
+      // (a Sort above a plain exchange) loses the join keys' distribution, and an operator above that needs it adds
+      // an exchange.
+      RelDistribution inputRelDistribution = input.getTraitSet().getDistribution();
+      if (inputRelDistribution != null && inputRelDistribution.getType() == RelDistribution.Type.HASH_DISTRIBUTED
+          && !inputRelDistribution.getKeys().isEmpty()) {
+        return inputRelDistribution;
+      }
     } else if (node instanceof LogicalFilter) {
       assert inputs.size() == 1;
       RelDistribution inputRelDistribution = input.getTraitSet().getDistribution();
@@ -185,6 +199,12 @@ public class PinotRelDistributionTraitRule extends RelOptRule {
     }
     // TODO: add the rest of the nodes.
     return computeCurrentDistribution(node);
+  }
+
+  /// Whether the Sort keeps every row: no offset, and no fetch or an `Integer.MAX_VALUE` fetch.
+  private static boolean isUnboundedSort(Sort sort) {
+    return sort.offset == null && (sort.fetch == null
+        || (sort.fetch instanceof RexLiteral && RexLiteral.intValue(sort.fetch) == Integer.MAX_VALUE));
   }
 
   private static RelDistribution computeCurrentDistribution(RelNode node) {
