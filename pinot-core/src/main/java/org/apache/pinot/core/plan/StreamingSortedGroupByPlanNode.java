@@ -25,6 +25,7 @@ import org.apache.pinot.core.common.Operator;
 import org.apache.pinot.core.operator.ColumnContext;
 import org.apache.pinot.core.operator.blocks.results.GroupByResultsBlock;
 import org.apache.pinot.core.operator.filter.BaseFilterOperator;
+import org.apache.pinot.core.operator.query.HashSortedGroupByOperator;
 import org.apache.pinot.core.operator.query.StreamingSortedGroupByOperator;
 import org.apache.pinot.core.query.aggregation.function.AggregationFunctionUtils;
 import org.apache.pinot.core.query.aggregation.function.AggregationFunctionUtils.AggregationInfo;
@@ -43,10 +44,15 @@ import org.apache.pinot.segment.spi.datasource.DataSource;
 /// one. [org.apache.pinot.core.plan.maker.InstancePlanMakerImplV2] therefore evaluates [#getFallbackReason] once, from
 /// metadata alone, before any plan node is built, and either engages the sorted path for every segment or for none.
 ///
-/// **Extension points (ticket 04).** The per-segment rules live in [#getSegmentFallbackReason]; relaxing "sorted,
-/// immutable, null-free" there (hash-then-sort for unsorted or consuming segments, a separate null group) is where
-/// those segments would be admitted, together with a different per-segment operator built in [#run()]. The query-shape
-/// rules live in [#getQueryFallbackReason].
+/// **Two kinds of per-segment stream.** A segment that is *sorted-streamable* (immutable, physically sorted on the key,
+/// single-value, dictionary-encoded; see [#isSortedStreamable]) gets [StreamingSortedGroupByOperator], which reads it
+/// in document order and never builds a hash table. Every other segment, unsorted, consuming or without a dictionary,
+/// gets [HashSortedGroupByOperator], which runs the existing hash aggregation and sorts the resulting groups by key.
+/// So no segment disqualifies the query; segments only differ in cost, which is what `AUTO` weighs through
+/// [#countSortedStreamable]. Null keys are handled by both.
+///
+/// **Extension points.** The query-shape rules live in [#getQueryFallbackReason]; a composite key needs those relaxed
+/// and the per-segment operators extended.
 ///
 /// Thread-safety: stateless apart from its inputs.
 public class StreamingSortedGroupByPlanNode implements PlanNode {
@@ -60,32 +66,40 @@ public class StreamingSortedGroupByPlanNode implements PlanNode {
 
   @Override
   public Operator<GroupByResultsBlock> run() {
+    String column = _queryContext.getGroupByExpressions().get(0).getIdentifier();
+    IndexSegment indexSegment = _segmentContext.getIndexSegment();
+    if (!isSortedStreamable(indexSegment, _queryContext, column)) {
+      return new HashSortedGroupByOperator(_queryContext, new GroupByPlanNode(_segmentContext, _queryContext).run(),
+          indexSegment);
+    }
     FilterPlanNode filterPlanNode = new FilterPlanNode(_segmentContext, _queryContext);
     BaseFilterOperator filterOperator = filterPlanNode.run();
     // No star-tree: it pre-aggregates and would not give document-id (key) order
     AggregationInfo aggregationInfo =
         AggregationFunctionUtils.buildAggregationInfoWithoutStarTree(_segmentContext, _queryContext,
             _queryContext.getAggregationFunctions(), filterOperator);
-    return new StreamingSortedGroupByOperator(_queryContext, aggregationInfo,
-        _segmentContext.getIndexSegment().getSegmentMetadata().getTotalDocs());
+    return new StreamingSortedGroupByOperator(_queryContext, aggregationInfo, indexSegment,
+        indexSegment.getSegmentMetadata().getTotalDocs());
   }
 
-  /// Returns why the sorted streaming GROUP BY cannot be used for this query over these segments, or `null` if it can.
-  /// Reads query shape and segment metadata only; acquires no segment.
+  /// Returns why the sorted streaming GROUP BY cannot be used for this query, or `null` if it can. Reads the query
+  /// shape only: every segment can join the merge, through the sorted or the hash-then-sort operator.
   @Nullable
-  public static String getFallbackReason(List<SegmentContext> segmentContexts, QueryContext queryContext) {
-    String reason = getQueryFallbackReason(queryContext);
-    if (reason != null) {
-      return reason;
-    }
+  public static String getFallbackReason(QueryContext queryContext) {
+    return getQueryFallbackReason(queryContext);
+  }
+
+  /// Number of `segmentContexts` that are [sorted-streamable][#isSortedStreamable] on the group-by column. Metadata
+  /// only; acquires no segment.
+  public static int countSortedStreamable(List<SegmentContext> segmentContexts, QueryContext queryContext) {
     String column = queryContext.getGroupByExpressions().get(0).getIdentifier();
+    int numSorted = 0;
     for (SegmentContext segmentContext : segmentContexts) {
-      reason = getSegmentFallbackReason(segmentContext.getIndexSegment(), queryContext, column);
-      if (reason != null) {
-        return reason;
+      if (isSortedStreamable(segmentContext.getIndexSegment(), queryContext, column)) {
+        numSorted++;
       }
     }
-    return null;
+    return numSorted;
   }
 
   /// Query-shape rules: a single plain column key, and nothing that trims or filters groups at the leaf.
@@ -127,28 +141,18 @@ public class StreamingSortedGroupByPlanNode implements PlanNode {
     return null;
   }
 
-  /// Per-segment rules: an immutable segment whose metadata says the key column is sorted, single-value and
-  /// dictionary-encoded, and (with null handling on) known to hold no nulls.
-  @Nullable
-  static String getSegmentFallbackReason(IndexSegment segment, QueryContext queryContext, String column) {
+  /// Whether `segment` can feed the merge straight from its document order: immutable, with metadata saying the key
+  /// column is sorted, single-value and dictionary-encoded. Null keys do not matter: with null handling on the operator
+  /// splits them out by the null bitmap. Reads metadata only.
+  public static boolean isSortedStreamable(IndexSegment segment, QueryContext queryContext, String column) {
     if (segment instanceof MutableSegment) {
-      return "consuming segment";
+      return false;
     }
     DataSource dataSource = segment.getDataSource(column, queryContext.getSchema());
     if (!dataSource.getDataSourceMetadata().isSorted()) {
-      return "segment not sorted on " + column;
+      return false;
     }
     ColumnContext columnContext = ColumnContext.fromDataSource(dataSource);
-    if (!columnContext.isSingleValue()) {
-      return "multi-value group-by column";
-    }
-    if (!columnContext.isDictionaryEncoded()) {
-      return "group-by column is not dictionary-encoded";
-    }
-    // A null row holds the default value, which sits wherever that value sorts, so it breaks the run order.
-    if (queryContext.isNullHandlingEnabled() && !SelectionPlanNode.isColumnFlaggedNonNull(segment, column)) {
-      return "null handling is enabled and " + column + " may hold nulls";
-    }
-    return null;
+    return columnContext.isSingleValue() && columnContext.isDictionaryEncoded();
   }
 }

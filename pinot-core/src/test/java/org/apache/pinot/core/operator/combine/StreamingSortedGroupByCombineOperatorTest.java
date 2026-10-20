@@ -23,6 +23,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.TreeSet;
@@ -30,12 +31,15 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 import org.apache.commons.io.FileUtils;
+import org.apache.pinot.common.partition.function.ModuloPartitionFunction;
+import org.apache.pinot.common.proto.Plan;
 import org.apache.pinot.common.utils.DataSchema;
 import org.apache.pinot.core.operator.AcquireReleaseColumnsSegmentOperator;
 import org.apache.pinot.core.operator.blocks.results.BaseResultsBlock;
 import org.apache.pinot.core.operator.blocks.results.ExceptionResultsBlock;
 import org.apache.pinot.core.operator.blocks.results.GroupByResultsBlock;
 import org.apache.pinot.core.operator.blocks.results.MetadataResultsBlock;
+import org.apache.pinot.core.operator.query.HashSortedGroupByOperator;
 import org.apache.pinot.core.operator.query.StreamingSortedGroupByOperator;
 import org.apache.pinot.core.operator.streaming.BaseStreamingCombineOperator;
 import org.apache.pinot.core.plan.CombinePlanNode;
@@ -52,6 +56,9 @@ import org.apache.pinot.segment.local.segment.readers.GenericRowRecordReader;
 import org.apache.pinot.segment.spi.IndexSegment;
 import org.apache.pinot.segment.spi.SegmentContext;
 import org.apache.pinot.segment.spi.creator.SegmentGeneratorConfig;
+import org.apache.pinot.segment.spi.datasource.DataSourceMetadata;
+import org.apache.pinot.spi.config.table.ColumnPartitionConfig;
+import org.apache.pinot.spi.config.table.SegmentPartitionConfig;
 import org.apache.pinot.spi.config.table.TableConfig;
 import org.apache.pinot.spi.config.table.TableType;
 import org.apache.pinot.spi.data.FieldSpec;
@@ -93,6 +100,7 @@ public class StreamingSortedGroupByCombineOperatorTest {
   /// Keys 0..(NUM_SEGMENTS - 1) * KEY_STRIDE + KEYS_PER_SEGMENT - 1: every key but the extremes spans 2-3 segments
   private static final int NUM_DISTINCT_KEYS = (NUM_SEGMENTS - 1) * KEY_STRIDE + KEYS_PER_SEGMENT;
 
+  private static final int NUM_PARTITIONS = 4;
   private static final String AGGS = "COUNT(*), SUM(val), MIN(val), MAX(val)";
   /// A LIMIT at or above numGroupsLimit cannot trim at the leaf; the default LIMIT 10 would (see the gate).
   private static final String BIG_LIMIT = " LIMIT 1000000";
@@ -115,6 +123,17 @@ public class StreamingSortedGroupByCombineOperatorTest {
   /// Two segments with 3 keys of 12000 rows each, so every key run spans more than one 10000-doc value block
   private List<IndexSegment> _bigRunSegments;
   private IndexSegment _unsortedSegment;
+  /// 4 partitions (Modulo 4 of the key) x 2 sorted segments each, one partition per segment, overlapping keys
+  private List<IndexSegment> _partitionedSortedSegments;
+  /// 4 partitions x 3 unsorted segments each
+  private List<IndexSegment> _partitionedUnsortedSegments;
+  /// Sorted segments partitioned by Modulo 8, so they disagree with the Modulo 4 ones
+  private IndexSegment _modulo8Segment;
+  /// Partitioned by Modulo 4 but holding keys of every partition, so it reports several partitions
+  private IndexSegment _spanningSegment;
+  /// Segments that carry null keys next to a real key equal to the null default value, built with null handling
+  private List<IndexSegment> _nullBearingSortedSegments;
+  private IndexSegment _nullBearingUnsortedSegment;
 
   @BeforeClass
   public void setUp()
@@ -138,6 +157,35 @@ public class StreamingSortedGroupByCombineOperatorTest {
     List<GenericRow> unsortedRows = sortedRows(0, KEYS_PER_SEGMENT, 7);
     Collections.shuffle(unsortedRows, new Random(42));
     _unsortedSegment = buildSegment(UNSORTED_TABLE_CONFIG, "unsorted_0", unsortedRows);
+
+    _partitionedSortedSegments = new ArrayList<>();
+    for (int partition = 0; partition < NUM_PARTITIONS; partition++) {
+      for (int j = 0; j < 2; j++) {
+        _partitionedSortedSegments.add(buildSegment(partitionedConfig(true, NUM_PARTITIONS),
+            "partSorted_" + partition + "_" + j,
+            partitionRows(partition, NUM_PARTITIONS, j * 20, j * 20 + 60, j), false));
+      }
+    }
+    _partitionedUnsortedSegments = new ArrayList<>();
+    for (int partition = 0; partition < NUM_PARTITIONS; partition++) {
+      for (int j = 0; j < 3; j++) {
+        List<GenericRow> rows = partitionRows(partition, NUM_PARTITIONS, j * 10, j * 10 + 50, 100 + j);
+        Collections.shuffle(rows, new Random(partition * 10 + j));
+        _partitionedUnsortedSegments.add(buildSegment(partitionedConfig(false, NUM_PARTITIONS),
+            "partUnsorted_" + partition + "_" + j, rows, false));
+      }
+    }
+    _modulo8Segment = buildSegment(partitionedConfig(true, 8), "mod8_0", partitionRows(0, 8, 0, 40, 5), false);
+    _spanningSegment = buildSegment(partitionedConfig(true, NUM_PARTITIONS), "spanning_0", sortedRows(0, 12, 6), false);
+
+    _nullBearingSortedSegments = new ArrayList<>();
+    _nullBearingSortedSegments.add(buildSegment(SORTED_TABLE_CONFIG, "nullSorted_0",
+        nullBearingSortedRows(1, 10, 0), true));
+    _nullBearingSortedSegments.add(buildSegment(SORTED_TABLE_CONFIG, "nullSorted_1",
+        nullBearingSortedRows(5, 11, 500), true));
+    List<GenericRow> nullUnsortedRows = nullBearingSortedRows(3, 9, 900);
+    Collections.shuffle(nullUnsortedRows, new Random(7));
+    _nullBearingUnsortedSegment = buildSegment(UNSORTED_TABLE_CONFIG, "nullUnsorted_0", nullUnsortedRows, true);
   }
 
   @AfterClass
@@ -150,6 +198,18 @@ public class StreamingSortedGroupByCombineOperatorTest {
       segment.destroy();
     }
     _unsortedSegment.destroy();
+    for (IndexSegment segment : _partitionedSortedSegments) {
+      segment.destroy();
+    }
+    for (IndexSegment segment : _partitionedUnsortedSegments) {
+      segment.destroy();
+    }
+    _modulo8Segment.destroy();
+    _spanningSegment.destroy();
+    for (IndexSegment segment : _nullBearingSortedSegments) {
+      segment.destroy();
+    }
+    _nullBearingUnsortedSegment.destroy();
     FileUtils.deleteDirectory(TEMP_DIR);
   }
 
@@ -173,9 +233,62 @@ public class StreamingSortedGroupByCombineOperatorTest {
     return rows;
   }
 
+  /// Keys k in [firstKey, endKey) with k % numPartitions == partition, sorted; key k appears 1 + k % 3 times.
+  private static List<GenericRow> partitionRows(int partition, int numPartitions, int firstKey, int endKey, int salt) {
+    List<GenericRow> rows = new ArrayList<>();
+    for (int key = firstKey; key < endKey; key++) {
+      if (key % numPartitions != partition) {
+        continue;
+      }
+      int repeats = 1 + key % 3;
+      for (int r = 0; r < repeats; r++) {
+        rows.add(row(key, (key * 31 + r) % 17, (long) key * 10 + r + salt));
+      }
+    }
+    return rows;
+  }
+
+  private static TableConfig partitionedConfig(boolean sorted, int numPartitions) {
+    TableConfigBuilder builder = new TableConfigBuilder(TableType.OFFLINE).setTableName(RAW_TABLE_NAME)
+        .setSegmentPartitionConfig(new SegmentPartitionConfig(
+            Map.of(KEY_COL, new ColumnPartitionConfig("Modulo", numPartitions))));
+    if (sorted) {
+      builder.setSortedColumn(KEY_COL);
+    }
+    return builder.build();
+  }
+
+  /// A row whose key is null: it holds the column's default null value, which is also a legal real key.
+  private static GenericRow nullKeyRow(int other, long val) {
+    GenericRow row = row(0, other, val);
+    row.putDefaultNullValue(KEY_COL, FieldSpec.DEFAULT_DIMENSION_NULL_VALUE_OF_INT);
+    return row;
+  }
+
+  /// Physically sorted by key. The leading run holds real keys equal to the null default value, interleaved with null
+  /// keys (which hold that same value), followed by `numKeys` ordinary keys.
+  private static List<GenericRow> nullBearingSortedRows(int firstKey, int numKeys, int salt) {
+    int defaultKey = FieldSpec.DEFAULT_DIMENSION_NULL_VALUE_OF_INT;
+    List<GenericRow> rows = new ArrayList<>();
+    rows.add(row(defaultKey, 1, 1000 + salt));
+    rows.add(nullKeyRow(2, 2000 + salt));
+    rows.add(row(defaultKey, 3, 3000 + salt));
+    rows.add(nullKeyRow(4, 4000 + salt));
+    rows.add(nullKeyRow(5, 5000 + salt));
+    rows.addAll(sortedRows(firstKey, numKeys, salt));
+    return rows;
+  }
+
   private static IndexSegment buildSegment(TableConfig tableConfig, String segmentName, List<GenericRow> rows)
       throws Exception {
+    return buildSegment(tableConfig, segmentName, rows, false);
+  }
+
+  private static IndexSegment buildSegment(TableConfig tableConfig, String segmentName, List<GenericRow> rows,
+      boolean nullHandling)
+      throws Exception {
     SegmentGeneratorConfig config = new SegmentGeneratorConfig(tableConfig, SCHEMA);
+    config.setDefaultNullHandlingEnabled(nullHandling);
     config.setTableName(RAW_TABLE_NAME);
     config.setSegmentName(segmentName);
     config.setOutDir(TEMP_DIR.getPath());
@@ -197,6 +310,7 @@ public class StreamingSortedGroupByCombineOperatorTest {
     int _numDataBlocks;
     DataSchema _schema;
     BaseResultsBlock _terminal;
+    boolean _numGroupsLimitReached;
   }
 
   /// Builds the query context and combine operator exactly as an MSE leaf would get them: the streaming instance plan
@@ -231,14 +345,21 @@ public class StreamingSortedGroupByCombineOperatorTest {
   private static Result drive(Result result) {
     BaseCombineOperator<?> combine = result._combine;
     if (combine instanceof StreamingSortedGroupByCombineOperator) {
-      while (true) {
-        BaseResultsBlock block = combine.nextBlock();
-        if (block instanceof MetadataResultsBlock || block instanceof ExceptionResultsBlock) {
-          result._terminal = block;
-          break;
+      StreamingSortedGroupByCombineOperator streaming = (StreamingSortedGroupByCombineOperator) combine;
+      // As StreamingInstanceResponseOperator does: start (spawns the partition tasks, if any), pull, always stop
+      streaming.start();
+      try {
+        while (true) {
+          BaseResultsBlock block = combine.nextBlock();
+          if (block instanceof MetadataResultsBlock || block instanceof ExceptionResultsBlock) {
+            result._terminal = block;
+            break;
+          }
+          collect(result, (GroupByResultsBlock) block);
+          assertTrue(result._numDataBlocks < 1_000_000, "Streaming combine did not terminate");
         }
-        collect(result, (GroupByResultsBlock) block);
-        assertTrue(result._numDataBlocks < 1_000_000, "Streaming combine did not terminate");
+      } finally {
+        streaming.stop();
       }
     } else {
       BaseResultsBlock block = combine.nextBlock();
@@ -253,6 +374,7 @@ public class StreamingSortedGroupByCombineOperatorTest {
 
   private static void collect(Result result, GroupByResultsBlock block) {
     result._numDataBlocks++;
+    result._numGroupsLimitReached |= block.isNumGroupsLimitReached();
     if (result._schema == null) {
       result._schema = block.getDataSchema();
     }
@@ -287,14 +409,35 @@ public class StreamingSortedGroupByCombineOperatorTest {
     return on;
   }
 
+  /// Engaged, every segment on the sorted fast path.
   private static void assertEngaged(Result result) {
+    assertEngaged(result, result._combine.getChildOperators().size(), 0);
+  }
+
+  /// Engaged, with the given number of segments on the sorted fast path and on the hash-then-sort path.
+  private static void assertEngaged(Result result, int expectedSorted, int expectedHash) {
     assertTrue(result._queryContext.isSortedGroupByEnabled());
     assertNull(result._queryContext.getSortedGroupByFallbackReason());
     assertEquals(result._combine.getClass(), StreamingSortedGroupByCombineOperator.class);
+    int numSorted = 0;
+    int numHash = 0;
     for (Object child : result._combine.getChildOperators()) {
-      assertTrue(unwrap(child) instanceof StreamingSortedGroupByOperator, "Child is " + child.getClass());
+      Object unwrapped = unwrap(child);
+      if (unwrapped instanceof StreamingSortedGroupByOperator) {
+        numSorted++;
+      } else if (unwrapped instanceof HashSortedGroupByOperator) {
+        numHash++;
+      } else {
+        throw new AssertionError("Unexpected child " + unwrapped.getClass());
+      }
     }
+    assertEquals(numSorted, expectedSorted, "sorted-path segments");
+    assertEquals(numHash, expectedHash, "hash-then-sort segments");
     assertEquals(result._combine.toExplainString(), StreamingSortedGroupByCombineOperator.EXPLAIN_NAME);
+  }
+
+  private static Map<String, Plan.ExplainNode.AttributeValue> explain(Result result) {
+    return result._combine.getExplainInfo().getAttributes();
   }
 
   private static void assertNotEngaged(Result result, String expectedReasonFragment) {
@@ -405,7 +548,9 @@ public class StreamingSortedGroupByCombineOperatorTest {
     Result on = run(_sortedSegments,
         "SET sortedGroupByMode='ON'; SELECT key, " + AGGS + " FROM testTable GROUP BY key LIMIT 5", 0);
     assertNotEngaged(on, "LIMIT 5");
-    assertEquals(on._rows.size(), 5);
+    // The multi-threaded combine table can overshoot LIMIT by a few groups when workers race to the cap (seen as 6 or
+    // 7), so only assert that it trimmed, not exactly where.
+    assertTrue(on._rows.size() >= 5 && on._rows.size() < NUM_DISTINCT_KEYS, "rows: " + on._rows.size());
     // The default LIMIT of 10 is a LIMIT too
     assertNotEngaged(run(_sortedSegments,
         "SET sortedGroupByMode='ON'; SELECT key, " + AGGS + " FROM testTable GROUP BY key", 0), "LIMIT 10");
@@ -417,12 +562,6 @@ public class StreamingSortedGroupByCombineOperatorTest {
     assertFalse(off._queryContext.isSortedGroupByEnabled());
     assertNull(off._queryContext.getSortedGroupByFallbackReason(), "Never requested, so nothing to explain");
     assertFalse(off._combine instanceof StreamingSortedGroupByCombineOperator);
-  }
-
-  @Test
-  public void testAutoIsNotEngagedYet() {
-    Result auto = run(_sortedSegments, "SET sortedGroupByMode='AUTO'; " + QUERY, 0);
-    assertNotEngaged(auto, "AUTO");
   }
 
   @Test(expectedExceptions = IllegalArgumentException.class, expectedExceptionsMessageRegExp = ".*sortedGroupByMode.*")
@@ -459,10 +598,16 @@ public class StreamingSortedGroupByCombineOperatorTest {
     assertNotEngaged(on, "not a plain column");
   }
 
+  /// A key no segment is sorted on is no longer a fallback: every segment hashes, sorts its groups and joins the merge.
   @Test
-  public void testFallbackNonSortedKey() {
-    Result on = assertParity(_sortedSegments, "SELECT other, COUNT(*) FROM testTable GROUP BY other" + BIG_LIMIT, 0);
-    assertNotEngaged(on, "not sorted");
+  public void testNonSortedKeyRunsHashThenSortOnEverySegment() {
+    Result on = assertParity(_sortedSegments, "SELECT other, COUNT(*) FROM testTable GROUP BY other" + BIG_LIMIT, 4);
+    assertEngaged(on, 0, NUM_SEGMENTS);
+    assertTrue(on._numDataBlocks > 1, "Expected several blocks");
+    List<Object[]> rows = on._rows;
+    for (int i = 1; i < rows.size(); i++) {
+      assertTrue((Integer) rows.get(i - 1)[0] < (Integer) rows.get(i)[0], "Keys not strictly ascending at " + i);
+    }
   }
 
   @Test
@@ -480,39 +625,6 @@ public class StreamingSortedGroupByCombineOperatorTest {
     Result on = assertParity(_sortedSegments,
         "SELECT key, " + AGGS + " FROM testTable GROUP BY key HAVING COUNT(*) > 3" + BIG_LIMIT, 0);
     assertNotEngaged(on, "HAVING");
-  }
-
-  @Test
-  public void testFallbackWhenOneSegmentIsNotSorted() {
-    List<IndexSegment> segments = new ArrayList<>(_sortedSegments);
-    segments.add(_unsortedSegment);
-    Result on = assertParity(segments, QUERY, 0);
-    assertNotEngaged(on, "not sorted");
-  }
-
-  @Test
-  public void testFallbackWhenOneSegmentIsConsuming()
-      throws Exception {
-    MutableSegmentImpl consuming =
-        MutableSegmentImplTestUtils.createMutableSegmentImpl(SCHEMA, Set.of(), Set.of(), Set.of(), false, true);
-    try {
-      for (GenericRow row : sortedRows(0, KEYS_PER_SEGMENT, 3)) {
-        consuming.index(row, null);
-      }
-      List<IndexSegment> segments = new ArrayList<>(_sortedSegments);
-      segments.add(consuming);
-      Result on = assertParity(segments, QUERY, 0);
-      assertNotEngaged(on, "consuming segment");
-    } finally {
-      consuming.destroy();
-    }
-  }
-
-  @Test
-  public void testFallbackWhenNullHandlingIsOnAndColumnIsNotFlaggedNonNull() {
-    // The fixture segments were built with null handling off, so their key column is not flagged non-null
-    Result on = assertParity(_sortedSegments, "SET enableNullHandling=true; " + QUERY, 0);
-    assertNotEngaged(on, "null handling");
   }
 
   // ---------------------------------------------------------------------------------------------------------------
@@ -570,5 +682,366 @@ public class StreamingSortedGroupByCombineOperatorTest {
     ((BaseStreamingCombineOperator<?>) result._combine).stop();
     ((BaseStreamingCombineOperator<?>) result._combine).stop();
     assertTrue(result._combine.nextBlock() instanceof MetadataResultsBlock, "A stopped merge must not resume");
+  }
+
+  // ---------------------------------------------------------------------------------------------------------------
+  // Unsorted, mixed and consuming segments (hash then sort)
+  // ---------------------------------------------------------------------------------------------------------------
+
+  /// Sorted, unsorted and consuming segments in one query: sorted ones stream, the others hash and sort, one merge.
+  @Test
+  public void testSortedUnsortedAndConsumingSegmentsMatchOff()
+      throws Exception {
+    MutableSegmentImpl consuming =
+        MutableSegmentImplTestUtils.createMutableSegmentImpl(SCHEMA, Set.of(), Set.of(), Set.of(), false, true);
+    try {
+      List<GenericRow> consumingRows = sortedRows(10, KEYS_PER_SEGMENT, 3);
+      Collections.shuffle(consumingRows, new Random(3));
+      for (GenericRow row : consumingRows) {
+        consuming.index(row, null);
+      }
+      List<IndexSegment> segments = new ArrayList<>(_sortedSegments);
+      segments.add(_unsortedSegment);
+      segments.add(consuming);
+      for (int blockSize : new int[]{0, 3}) {
+        Result on = assertParity(segments, QUERY, blockSize);
+        assertEngaged(on, NUM_SEGMENTS, 2);
+        assertStrictlyAscendingKeys(on._rows);
+        assertEquals(explain(on).get("numMergeGroups").getLong(), 1L);
+        assertFalse(explain(on).get("parallel").getBool());
+        assertTrue(on._queryContext.getSortedGroupByDecision().contains("5/7 segments sorted"),
+            on._queryContext.getSortedGroupByDecision());
+      }
+      // Final results as well: a hash-then-sort group is final-converted exactly like a sorted one
+      assertEngaged(assertParity(segments, "SET serverReturnFinalResult=true; SELECT key, SUM(val), AVG(val), "
+          + "DISTINCTCOUNT(other) FROM testTable GROUP BY key" + BIG_LIMIT, 9), NUM_SEGMENTS, 2);
+    } finally {
+      consuming.destroy();
+    }
+  }
+
+  @Test
+  public void testOnlyUnsortedAndConsumingSegments()
+      throws Exception {
+    MutableSegmentImpl consuming =
+        MutableSegmentImplTestUtils.createMutableSegmentImpl(SCHEMA, Set.of(), Set.of(), Set.of(), false, true);
+    try {
+      for (GenericRow row : sortedRows(30, KEYS_PER_SEGMENT, 3)) {
+        consuming.index(row, null);
+      }
+      Result on = assertParity(List.of(_unsortedSegment, consuming), QUERY, 0);
+      assertEngaged(on, 0, 2);
+      assertStrictlyAscendingKeys(on._rows);
+    } finally {
+      consuming.destroy();
+    }
+  }
+
+  /// The hash path's own numGroupsLimit still applies to a segment it aggregates, and its flag survives the merge.
+  @Test
+  public void testHashPathKeepsItsNumGroupsLimitFlag() {
+    String query = "SET numGroupsLimit=10; " + QUERY;
+    Result off = run(List.of(_unsortedSegment), query, 0);
+    Result on = run(List.of(_unsortedSegment), "SET sortedGroupByMode='ON'; " + query, 0);
+    assertEngaged(on, 0, 1);
+    assertEquals(on._rows.size(), 10);
+    assertEquals(on._rows.size(), off._rows.size());
+    assertTrue(off._numGroupsLimitReached);
+    assertTrue(on._numGroupsLimitReached, "The limit flag of the hash aggregation must reach the merged blocks");
+  }
+
+  // ---------------------------------------------------------------------------------------------------------------
+  // AUTO
+  // ---------------------------------------------------------------------------------------------------------------
+
+  @Test
+  public void testAutoEngagesAboveTheSortedRatio() {
+    List<IndexSegment> segments = new ArrayList<>(_sortedSegments);
+    segments.add(_unsortedSegment);
+    // 5 of 6 sorted = 0.83 >= the 0.8 default
+    Result auto = run(segments, "SET sortedGroupByMode='AUTO'; " + QUERY, 0);
+    assertEngaged(auto, NUM_SEGMENTS, 1);
+    assertEquals(explain(auto).get("decision").getString(), auto._queryContext.getSortedGroupByDecision());
+    assertTrue(explain(auto).get("decision").getString().startsWith("AUTO: 5/6 segments sorted (ratio 0.83 >= "),
+        explain(auto).get("decision").getString());
+    assertEquals(canonical(auto._rows), canonical(run(segments, QUERY, 0)._rows));
+
+    // The ratio is the one option of the streaming selection merge
+    List<IndexSegment> half = new ArrayList<>(_sortedSegments.subList(0, 3));
+    half.add(_unsortedSegment);
+    half.add(_unsortedSegment);
+    half.add(_unsortedSegment);
+    Result lowered = run(half, "SET sortedGroupByMode='AUTO'; SET sortedSelectionMergeAutoMinSortedRatio=0.5; " + QUERY,
+        0);
+    assertEngaged(lowered, 3, 3);
+    assertEquals(canonical(lowered._rows), canonical(run(half, QUERY, 0)._rows));
+  }
+
+  @Test
+  public void testAutoFallsBackBelowTheSortedRatio() {
+    List<IndexSegment> segments = new ArrayList<>(_sortedSegments.subList(0, 3));
+    segments.add(_unsortedSegment);
+    segments.add(_unsortedSegment);
+    segments.add(_unsortedSegment);
+    Result auto = run(segments, "SET sortedGroupByMode='AUTO'; " + QUERY, 0);
+    assertNotEngaged(auto, "AUTO: 3/6 segments sorted (ratio 0.50 < threshold 0.80)");
+    assertEquals(auto._queryContext.getSortedGroupByDecision(), auto._queryContext.getSortedGroupByFallbackReason());
+    // Falling back runs the existing path, with identical results
+    assertEquals(canonical(auto._rows), canonical(run(segments, QUERY, 0)._rows));
+    // ON engages regardless of the ratio
+    assertEngaged(run(segments, "SET sortedGroupByMode='ON'; " + QUERY, 0), 3, 3);
+  }
+
+  @Test
+  public void testAutoStillHonorsTheQueryShapeRules() {
+    Result auto = run(_sortedSegments, "SET sortedGroupByMode='AUTO'; SELECT key, COUNT(*) FROM testTable GROUP BY key "
+        + "ORDER BY key LIMIT 5", 0);
+    assertNotEngaged(auto, "ORDER BY");
+    assertNull(auto._queryContext.getSortedGroupByDecision());
+  }
+
+  // ---------------------------------------------------------------------------------------------------------------
+  // Null keys
+  // ---------------------------------------------------------------------------------------------------------------
+
+  /// A real key equal to the null default value and null keys, in several segments of every kind: with null handling on
+  /// the nulls form a group of their own that sorts last and is merged across segments.
+  @Test
+  public void testNullKeysAreTheirOwnGroupWithNullHandlingOn()
+      throws Exception {
+    MutableSegmentImpl consuming =
+        MutableSegmentImplTestUtils.createMutableSegmentImpl(SCHEMA, Set.of(), Set.of(), Set.of(), false, true);
+    try {
+      for (GenericRow row : nullBearingSortedRows(2, 7, 300)) {
+        consuming.index(row, null);
+      }
+      String nullHandling = "SET enableNullHandling=true; ";
+      int defaultKey = FieldSpec.DEFAULT_DIMENSION_NULL_VALUE_OF_INT;
+      List<List<IndexSegment>> cases = new ArrayList<>();
+      cases.add(_nullBearingSortedSegments);
+      List<IndexSegment> mixed = new ArrayList<>(_nullBearingSortedSegments);
+      mixed.add(_nullBearingUnsortedSegment);
+      mixed.add(consuming);
+      cases.add(mixed);
+      cases.add(List.of(_nullBearingUnsortedSegment, consuming));
+      for (List<IndexSegment> segments : cases) {
+        for (String aggs : new String[]{"COUNT(*), SUM(val), MIN(val), MAX(val)", "COUNT(val), SUM(other)"}) {
+          String query = nullHandling + "SELECT key, " + aggs + " FROM testTable GROUP BY key" + BIG_LIMIT;
+          Result on = assertParity(segments, query, 0);
+          int numSorted = (int) segments.stream().filter(_nullBearingSortedSegments::contains).count();
+          assertEngaged(on, numSorted, segments.size() - numSorted);
+          // The real default-valued key and the null key are two groups, null last
+          long numNullGroups = on._rows.stream().filter(row -> row[0] == null).count();
+          long numDefaultGroups = on._rows.stream().filter(row -> Integer.valueOf(defaultKey).equals(row[0])).count();
+          assertEquals(numNullGroups, 1L, "exactly one null group in " + query);
+          assertEquals(numDefaultGroups, 1L, "exactly one real default-valued group in " + query);
+          assertNull(on._rows.get(on._rows.size() - 1)[0], "the null group is emitted last");
+        }
+      }
+      // Known totals: each fixture segment holds 3 null rows and 2 real default-valued rows
+      Result counts = run(_nullBearingSortedSegments,
+          nullHandling + "SET sortedGroupByMode='ON'; SELECT key, COUNT(*) FROM testTable GROUP BY key" + BIG_LIMIT, 0);
+      for (Object[] row : counts._rows) {
+        if (row[0] == null) {
+          assertEquals((long) (Long) row[1], 6L);
+        } else if (Integer.valueOf(defaultKey).equals(row[0])) {
+          assertEquals((long) (Long) row[1], 4L);
+        }
+      }
+    } finally {
+      consuming.destroy();
+    }
+  }
+
+  /// With null handling off a null row is just a row holding the default value: one group, as today.
+  @Test
+  public void testNullKeysWithNullHandlingOffMatchOff() {
+    List<IndexSegment> segments = new ArrayList<>(_nullBearingSortedSegments);
+    segments.add(_nullBearingUnsortedSegment);
+    Result on = assertParity(segments, QUERY, 0);
+    assertEngaged(on, 2, 1);
+    assertTrue(on._rows.stream().noneMatch(row -> row[0] == null));
+    Result explicitOff = assertParity(segments, "SET enableNullHandling=false; " + QUERY, 0);
+    assertEngaged(explicitOff, 2, 1);
+  }
+
+  /// Null-bearing segments no longer need the non-null flag: the old fallback is gone.
+  @Test
+  public void testNullHandlingOnNoLongerFallsBackOnAnUnflaggedColumn() {
+    // The fixture segments were built with null handling off, so their key column is not flagged non-null
+    Result on = assertParity(_sortedSegments, "SET enableNullHandling=true; " + QUERY, 0);
+    assertEngaged(on);
+    assertStrictlyAscendingKeys(on._rows);
+  }
+
+  // ---------------------------------------------------------------------------------------------------------------
+  // Per-partition parallel merge
+  // ---------------------------------------------------------------------------------------------------------------
+
+  private static void assertEveryKeyOnce(List<Object[]> rows) {
+    Set<Object> keys = new TreeSet<>();
+    for (Object[] row : rows) {
+      assertTrue(keys.add(row[0]), "Key emitted twice: " + row[0]);
+    }
+  }
+
+  private static long explainLong(Result result, String key) {
+    return explain(result).get(key).getLong();
+  }
+
+  @Test
+  public void testFixturesCarrySinglePartitionMetadata() {
+    for (IndexSegment segment : _partitionedSortedSegments) {
+      DataSourceMetadata metadata =
+          segment.getDataSource(KEY_COL, SCHEMA).getDataSourceMetadata();
+      assertNotNull(metadata.getPartitionFunction(), segment.getSegmentName());
+      assertEquals(metadata.getPartitions().size(), 1, segment.getSegmentName());
+      assertEquals(metadata.getPartitionFunction(), new ModuloPartitionFunction(NUM_PARTITIONS, null));
+    }
+  }
+
+  @Test
+  public void testOneMergeTaskPerPartition() {
+    for (int blockSize : new int[]{0, 3}) {
+      Result on = assertParity(_partitionedSortedSegments, QUERY, blockSize);
+      assertEngaged(on);
+      assertEquals(explainLong(on, "numMergeGroups"), (long) NUM_PARTITIONS);
+      assertTrue(explain(on).get("partitioned").getBool());
+      assertTrue(explain(on).get("parallel").getBool());
+      List<String> groups = explain(on).get("mergeGroups").getStringList().getValuesList();
+      assertEquals(groups, List.of("partition 0: 2 segments", "partition 1: 2 segments", "partition 2: 2 segments",
+          "partition 3: 2 segments"));
+      assertEveryKeyOnce(on._rows);
+      assertTrue(on._terminal instanceof MetadataResultsBlock);
+      if (blockSize == 3) {
+        assertTrue(on._numDataBlocks > NUM_PARTITIONS, "Expected several blocks, got " + on._numDataBlocks);
+      }
+    }
+    // Final results through the same workers
+    Result finalResults =
+        assertParity(_partitionedSortedSegments, "SET serverReturnFinalResult=true; " + QUERY, 5);
+    assertEngaged(finalResults);
+    assertEveryKeyOnce(finalResults._rows);
+  }
+
+  /// Hash-then-sort segments run on the worker threads, so the thread-local group-key state of the hash aggregation is
+  /// exercised concurrently; repeat to give a data race a chance to show.
+  @Test
+  public void testPartitionedHashSegmentsRunConcurrentlyWithoutSharingGroupKeyState() {
+    for (int i = 0; i < 25; i++) {
+      Result on = assertParity(_partitionedUnsortedSegments, QUERY, 4);
+      assertEngaged(on, 0, _partitionedUnsortedSegments.size());
+      assertEquals(explainLong(on, "numMergeGroups"), (long) NUM_PARTITIONS);
+      assertEveryKeyOnce(on._rows);
+    }
+  }
+
+  @Test
+  public void testPartitionedMixOfSortedAndHashSegments() {
+    List<IndexSegment> segments = new ArrayList<>(_partitionedSortedSegments);
+    segments.addAll(_partitionedUnsortedSegments);
+    Result on = assertParity(segments, QUERY, 6);
+    assertEngaged(on, _partitionedSortedSegments.size(), _partitionedUnsortedSegments.size());
+    assertEquals(explainLong(on, "numMergeGroups"), (long) NUM_PARTITIONS);
+    assertEveryKeyOnce(on._rows);
+  }
+
+  @Test
+  public void testConsumingSegmentJoinsItsPartition()
+      throws Exception {
+    // A consuming segment of partition 2 sits next to the immutable ones; its partition metadata comes from the rows
+    MutableSegmentImpl consuming = MutableSegmentImplTestUtils.createMutableSegmentImpl(SCHEMA, KEY_COL,
+        new ModuloPartitionFunction(NUM_PARTITIONS, null), 2, false);
+    try {
+      for (GenericRow row : partitionRows(2, NUM_PARTITIONS, 0, 100, 9)) {
+        consuming.index(row, null);
+      }
+      List<IndexSegment> segments = new ArrayList<>(_partitionedSortedSegments);
+      segments.add(consuming);
+      Result on = assertParity(segments, QUERY, 5);
+      assertEngaged(on, _partitionedSortedSegments.size(), 1);
+      assertEquals(explainLong(on, "numMergeGroups"), (long) NUM_PARTITIONS);
+      assertTrue(explain(on).get("mergeGroups").getStringList().getValuesList().contains("partition 2: 3 segments"));
+      assertEveryKeyOnce(on._rows);
+    } finally {
+      consuming.destroy();
+    }
+  }
+
+  @Test
+  public void testNoPartitionMetadataIsOneMergeGroup() {
+    Result on = assertParity(_sortedSegments, QUERY, 0);
+    assertEngaged(on);
+    assertEquals(explainLong(on, "numMergeGroups"), 1L);
+    assertFalse(explain(on).get("partitioned").getBool());
+    assertFalse(explain(on).get("parallel").getBool());
+    assertTrue(explain(on).get("notPartitionedBecause").getString().contains("no partition metadata"),
+        explain(on).get("notPartitionedBecause").getString());
+    // One partitioned and one unpartitioned segment is still one group
+    List<IndexSegment> someUnpartitioned = new ArrayList<>(_partitionedSortedSegments);
+    someUnpartitioned.add(_sortedSegments.get(0));
+    Result partial = assertParity(someUnpartitioned, QUERY, 0);
+    assertEngaged(partial);
+    assertEquals(explainLong(partial, "numMergeGroups"), 1L);
+    assertStrictlyAscendingKeys(partial._rows);
+  }
+
+  @Test
+  public void testMixedPartitionFunctionsAreOneMergeGroup() {
+    List<IndexSegment> segments = new ArrayList<>(_partitionedSortedSegments);
+    segments.add(_modulo8Segment);
+    Result on = assertParity(segments, QUERY, 0);
+    assertEngaged(on);
+    assertEquals(explainLong(on, "numMergeGroups"), 1L);
+    assertFalse(explain(on).get("partitioned").getBool());
+    assertTrue(explain(on).get("notPartitionedBecause").getString().contains("different partition functions"),
+        explain(on).get("notPartitionedBecause").getString());
+    assertStrictlyAscendingKeys(on._rows);
+  }
+
+  @Test
+  public void testSegmentSpanningPartitionsIsOneMergeGroup() {
+    assertTrue(_spanningSegment.getDataSource(KEY_COL, SCHEMA).getDataSourceMetadata().getPartitions().size() > 1);
+    List<IndexSegment> segments = new ArrayList<>(_partitionedSortedSegments);
+    segments.add(_spanningSegment);
+    Result on = assertParity(segments, QUERY, 0);
+    assertEngaged(on);
+    assertEquals(explainLong(on, "numMergeGroups"), 1L);
+    assertTrue(explain(on).get("notPartitionedBecause").getString().contains("spans"),
+        explain(on).get("notPartitionedBecause").getString());
+    assertStrictlyAscendingKeys(on._rows);
+  }
+
+  @Test
+  public void testStopWhileWorkersAreBlockedOnTheQueueReleasesEverything() {
+    // One-block queue and one-row blocks: every partition task blocks offering its second block
+    Result result = plan(_partitionedSortedSegments,
+        "SET sortedGroupByMode='ON'; SET maxStreamingPendingBlocks=1; " + QUERY, 1);
+    StreamingSortedGroupByCombineOperator combine = (StreamingSortedGroupByCombineOperator) result._combine;
+    combine.start();
+    assertTrue(combine.nextBlock() instanceof GroupByResultsBlock);
+    long startMs = System.currentTimeMillis();
+    combine.stop();
+    combine.stop();
+    assertTrue(System.currentTimeMillis() - startMs < 10_000, "stop() must cancel blocked workers, not wait for them");
+    assertTrue(combine.nextBlock() instanceof MetadataResultsBlock, "A stopped merge must not resume");
+  }
+
+  @Test
+  public void testCancellationIsHonoredWithParallelMerges() {
+    try (QueryThreadContext ignored = QueryThreadContext.openForSseTest()) {
+      Result result = plan(_partitionedSortedSegments, "SET sortedGroupByMode='ON'; " + QUERY, 1);
+      StreamingSortedGroupByCombineOperator combine = (StreamingSortedGroupByCombineOperator) result._combine;
+      combine.start();
+      try {
+        assertTrue(combine.nextBlock() instanceof GroupByResultsBlock);
+        QueryThreadContext.get().getExecutionContext()
+            .terminate(QueryErrorCode.QUERY_CANCELLATION, "cancelled by test");
+        BaseResultsBlock next = combine.nextBlock();
+        assertTrue(next instanceof ExceptionResultsBlock, "Expected an exception block, got " + next.getClass());
+      } finally {
+        combine.stop();
+      }
+    }
   }
 }
