@@ -54,6 +54,7 @@ import org.apache.pinot.core.query.executor.ResultsBlockStreamer;
 import org.apache.pinot.core.query.prefetch.FetchPlanner;
 import org.apache.pinot.core.query.prefetch.FetchPlannerRegistry;
 import org.apache.pinot.core.query.request.context.QueryContext;
+import org.apache.pinot.core.query.request.context.SortedGroupByDecision;
 import org.apache.pinot.core.query.request.context.utils.QueryContextUtils;
 import org.apache.pinot.segment.spi.FetchContext;
 import org.apache.pinot.segment.spi.IndexSegment;
@@ -626,32 +627,19 @@ public class InstancePlanMakerImplV2 implements PlanMaker {
       return;
     }
     String reason = StreamingSortedGroupByPlanNode.getFallbackReason(queryContext);
-    if (reason == null) {
-      int numSegments = segmentContexts.size();
-      int numSorted = StreamingSortedGroupByPlanNode.countSortedStreamable(segmentContexts, queryContext);
-      double sortedRatio = numSegments == 0 ? 0 : (double) numSorted / numSegments;
-      double minSortedRatio = queryContext.getSortedSelectionMergeAutoMinSortedRatio();
-      String decision =
-          String.format("%s: %d/%d segments sorted (ratio %.2f", mode, numSorted, numSegments, sortedRatio);
-      if (mode == SortedGroupByMode.AUTO) {
-        boolean enabled = sortedRatio >= minSortedRatio;
-        decision += String.format(" %s threshold %.2f)", enabled ? ">=" : "<", minSortedRatio);
-        queryContext.setSortedGroupByDecision(decision);
-        if (enabled) {
-          queryContext.setSortedGroupByMode(SortedGroupByMode.ON);
-        } else {
-          reason = decision;
-        }
-      } else {
-        queryContext.setSortedGroupByDecision(decision + ")");
-      }
-    }
+    SortedGroupByDecision decision;
     if (reason != null) {
-      LOGGER.debug("Not using the sorted streaming GROUP BY for {}={}: {}", QueryOptionKey.SORTED_GROUP_BY_MODE, mode,
-          reason);
-      queryContext.setSortedGroupByMode(SortedGroupByMode.OFF);
-      queryContext.setSortedGroupByFallbackReason(reason);
+      decision = SortedGroupByDecision.queryShapeFallback(mode, reason);
+    } else {
+      decision = SortedGroupByDecision.fromSegmentCounts(mode, segmentContexts.size(),
+          StreamingSortedGroupByPlanNode.countSortedStreamable(segmentContexts, queryContext),
+          queryContext.getSortedSelectionMergeAutoMinSortedRatio());
     }
+    if (!decision.isEngaged()) {
+      LOGGER.debug("Not using the sorted streaming GROUP BY for {}={}: {}", QueryOptionKey.SORTED_GROUP_BY_MODE, mode,
+          decision.getFallbackDetail());
+    }
+    queryContext.setSortedGroupByDecision(decision);
   }
 
   @Override
