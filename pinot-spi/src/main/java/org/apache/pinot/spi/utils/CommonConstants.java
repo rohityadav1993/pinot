@@ -999,6 +999,13 @@ public class CommonConstants {
         /// Output block size (rows) for the streaming selection ORDER BY combine.
         public static final String SORTED_SELECTION_MERGE_BLOCK_SIZE = "sortedSelectionMergeBlockSize";
 
+        /// Selects the sorted streaming GROUP BY: a per-segment operator that aggregates runs of equal keys over a
+        /// segment sorted on the single group-by column, and a combine that merges those per-segment key-ordered
+        /// streams by key. One of [Server.SortedGroupByMode] (case-insensitive); defaults to
+        /// [Server#DEFAULT_SORTED_GROUP_BY_MODE]. Engages only on the streaming instance plan (the path the MSE leaf
+        /// uses); the non-streaming plan ignores it.
+        public static final String SORTED_GROUP_BY_MODE = "sortedGroupByMode";
+
         public static final String NUM_REPLICA_GROUPS_TO_QUERY = "numReplicaGroupsToQuery";
         public static final String ORDERED_PREFERRED_POOLS = "orderedPreferredPools";
         public static final String USE_FIXED_REPLICA = "useFixedReplica";
@@ -1733,6 +1740,25 @@ public class CommonConstants {
     /// among many sorted ones. This default is chosen to tolerate that while still rejecting a mostly-unsorted table.
     /// It is a starting point rather than a measured optimum.
     public static final double DEFAULT_SORTED_SELECTION_MERGE_AUTO_MIN_SORTED_RATIO = 0.8;
+
+    /// Selects the sorted streaming GROUP BY ([Broker.Request.QueryOptionKey#SORTED_GROUP_BY_MODE]).
+    ///
+    /// The mode is a request, not a guarantee: the plan maker engages the sorted streaming path only when the query
+    /// shape and every queried segment qualify, and otherwise keeps the existing GROUP BY path with identical results.
+    public enum SortedGroupByMode {
+      /// Never use the sorted streaming GROUP BY.
+      OFF,
+      /// Use the sorted streaming GROUP BY whenever the query and all segments qualify; otherwise fall back to the
+      /// existing path.
+      ON,
+      /// Reserved: decide from segment metadata. Not implemented yet; currently resolves to [#OFF].
+      AUTO
+    }
+
+    public static final SortedGroupByMode DEFAULT_SORTED_GROUP_BY_MODE = SortedGroupByMode.OFF;
+
+    /// Maximum number of finished groups per block emitted by the sorted streaming GROUP BY combine.
+    public static final int DEFAULT_SORTED_GROUP_BY_MERGE_BLOCK_SIZE = 10_000;
     /// Server-wide override of [#DEFAULT_SORTED_SELECTION_MERGE_AUTO_MIN_SORTED_RATIO], applied to queries that do not
     /// set the query option.
     public static final String SORTED_SELECTION_MERGE_AUTO_MIN_SORTED_RATIO =

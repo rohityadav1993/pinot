@@ -46,6 +46,7 @@ import org.apache.pinot.spi.config.table.FieldConfig;
 import org.apache.pinot.spi.data.Schema;
 import org.apache.pinot.spi.utils.CommonConstants;
 import org.apache.pinot.spi.utils.CommonConstants.Server;
+import org.apache.pinot.spi.utils.CommonConstants.Server.SortedGroupByMode;
 import org.apache.pinot.spi.utils.CommonConstants.Server.SortedSelectionMergeMode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -151,6 +152,12 @@ public class QueryContext implements QueryScopedCache {
   /// Selects the streaming k-way-merge selection ORDER BY combine over sorted segments. `AUTO` is resolved to `ON`
   /// or `OFF` by the plan maker before any plan node is built, so the plan-node gates only ever see a decided value.
   private SortedSelectionMergeMode _sortedSelectionMergeMode = Server.DEFAULT_SORTED_SELECTION_MERGE_MODE;
+  // Sorted streaming GROUP BY. The plan maker resolves the requested mode to ON (engaged) or OFF before any plan node
+  // is built; _sortedGroupByFallbackReason records why a requested ON stayed OFF.
+  private SortedGroupByMode _sortedGroupByMode = Server.DEFAULT_SORTED_GROUP_BY_MODE;
+  @Nullable
+  private String _sortedGroupByFallbackReason;
+  private int _sortedGroupByBlockSize = Server.DEFAULT_SORTED_GROUP_BY_MERGE_BLOCK_SIZE;
   /// Minimum fraction of sorted segments for `AUTO` to resolve to `ON`
   private double _sortedSelectionMergeAutoMinSortedRatio =
       Server.DEFAULT_SORTED_SELECTION_MERGE_AUTO_MIN_SORTED_RATIO;
@@ -618,6 +625,37 @@ public class QueryContext implements QueryScopedCache {
       return false;
     }
     return _sortedSelectionMergeMode != SortedSelectionMergeMode.OFF;
+  }
+
+  public SortedGroupByMode getSortedGroupByMode() {
+    return _sortedGroupByMode;
+  }
+
+  public void setSortedGroupByMode(SortedGroupByMode sortedGroupByMode) {
+    _sortedGroupByMode = sortedGroupByMode;
+  }
+
+  /// Whether the plan uses the sorted streaming GROUP BY. Only a resolved `ON` engages; an unresolved `AUTO` does not.
+  public boolean isSortedGroupByEnabled() {
+    return _sortedGroupByMode == SortedGroupByMode.ON;
+  }
+
+  /// Why a requested sorted streaming GROUP BY was not engaged, or `null` when it was engaged or never requested.
+  @Nullable
+  public String getSortedGroupByFallbackReason() {
+    return _sortedGroupByFallbackReason;
+  }
+
+  public void setSortedGroupByFallbackReason(@Nullable String sortedGroupByFallbackReason) {
+    _sortedGroupByFallbackReason = sortedGroupByFallbackReason;
+  }
+
+  public int getSortedGroupByBlockSize() {
+    return _sortedGroupByBlockSize;
+  }
+
+  public void setSortedGroupByBlockSize(int sortedGroupByBlockSize) {
+    _sortedGroupByBlockSize = sortedGroupByBlockSize;
   }
 
   public double getSortedSelectionMergeAutoMinSortedRatio() {
