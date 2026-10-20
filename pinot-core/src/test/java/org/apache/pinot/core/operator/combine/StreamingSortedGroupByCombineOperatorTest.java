@@ -666,6 +666,33 @@ public class StreamingSortedGroupByCombineOperatorTest {
     assertNotEngaged(on, "HAVING");
   }
 
+  @Test
+  public void testFallbackGroupingSets() {
+    for (String groupBy : new String[]{"GROUPING SETS ((key))", "ROLLUP(key)"}) {
+      Result on = run(_sortedSegments, "SET sortedGroupByMode='ON'; SELECT key, COUNT(*), SUM(val) FROM testTable "
+          + "GROUP BY " + groupBy + BIG_LIMIT, 0);
+      assertNotEngaged(on, "grouping sets");
+      Result off = run(_sortedSegments, "SELECT key, COUNT(*), SUM(val) FROM testTable GROUP BY " + groupBy + BIG_LIMIT,
+          0);
+      assertEquals(canonical(on._rows), canonical(off._rows), groupBy);
+    }
+  }
+
+  @Test
+  public void testFallbackFilteredAggregations() {
+    Result on = assertParity(_sortedSegments,
+        "SELECT key, COUNT(*), SUM(val) FILTER (WHERE other > 3), MAX(val) FROM testTable GROUP BY key" + BIG_LIMIT, 0);
+    assertNotEngaged(on, "filtered aggregations");
+  }
+
+  @Test
+  public void testFallbackLimitZero() {
+    Result on = run(_sortedSegments,
+        "SET sortedGroupByMode='ON'; SELECT key, " + AGGS + " FROM testTable GROUP BY key LIMIT 0", 0);
+    assertNotEngaged(on, "LIMIT 0");
+    assertTrue(on._rows.isEmpty());
+  }
+
   // ---------------------------------------------------------------------------------------------------------------
   // No limits, no trimming
   // ---------------------------------------------------------------------------------------------------------------
