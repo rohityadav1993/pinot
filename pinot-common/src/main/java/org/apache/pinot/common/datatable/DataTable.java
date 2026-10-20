@@ -187,11 +187,15 @@ public interface DataTable {
     DIRECT_REMOTE_ACCESS_BYTES(48, "directRemoteAccessBytes", MetadataValueType.LONG),
     // Set when an aggregation function that can answer exactly returned an approximate final result on the server,
     // for example a SMART function that switched to a sketch.
-    APPROXIMATED_RESULT(49, "approximatedResult", MetadataValueType.STRING);
+    APPROXIMATED_RESULT(49, "approximatedResult", MetadataValueType.STRING),
+    // Set (to true) on the response of a streaming (multi-stage leaf) request for which the sorted streaming GROUP BY
+    // engaged. When the option was set but the query or a segment did not qualify, the reason is set instead.
+    SORTED_GROUP_BY_ENGAGED(50, "sortedGroupByEngaged", MetadataValueType.BOOLEAN),
+    SORTED_GROUP_BY_FALLBACK_REASON(51, "sortedGroupByFallbackReason", MetadataValueType.STRING);
 
     // We keep this constant to track the max id added so far for backward compatibility.
     // Increase it when adding new keys, but NEVER DECREASE IT!!!
-    private static final int MAX_ID = APPROXIMATED_RESULT.getId();
+    private static final int MAX_ID = SORTED_GROUP_BY_FALLBACK_REASON.getId();
 
     private static final MetadataKey[] ID_TO_ENUM_KEY_MAP = new MetadataKey[MAX_ID + 1];
     private static final Map<String, MetadataKey> NAME_TO_ENUM_KEY_MAP = new HashMap<>();
