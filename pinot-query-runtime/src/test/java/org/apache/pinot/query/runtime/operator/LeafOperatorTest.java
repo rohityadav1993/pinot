@@ -19,6 +19,8 @@
 package org.apache.pinot.query.runtime.operator;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import it.unimi.dsi.fastutil.doubles.DoubleArrayList;
+import it.unimi.dsi.fastutil.longs.LongArrayList;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -694,6 +696,45 @@ public class LeafOperatorTest {
     assertEquals(rows.size(), 2);
     assertEquals(rows.get(0), new Object[]{"a", 3L});
     assertEquals(rows.get(1), new Object[]{"b", 5L});
+    assertTrue(operator.nextBlock().isEos(), "Expected EOS after reading the group-by block");
+
+    operator.close();
+  }
+
+  @Test
+  public void shouldSerializeArrayListFinalResultsOfGroupByResultBlock() {
+    // Given: final results of array-returning aggregations (e.g. ARRAY_AGG, FUNNEL_COUNT) are XxxArrayList even
+    // though the declared column type is the primitive array type
+    QueryContext queryContext = QueryContextConverterUtils.getQueryContext(
+        "SELECT strCol, ARRAYAGG(longCol, 'LONG'), ARRAYAGG(doubleCol, 'DOUBLE') FROM tbl GROUP BY strCol");
+    DataSchema schema = new DataSchema(new String[]{"strCol", "longs", "doubles"},
+        new DataSchema.ColumnDataType[]{
+            DataSchema.ColumnDataType.STRING, DataSchema.ColumnDataType.LONG_ARRAY,
+            DataSchema.ColumnDataType.DOUBLE_ARRAY
+        });
+    List<Record> records = List.of(
+        new Record(new Object[]{"a", LongArrayList.wrap(new long[]{1L, 2L}), DoubleArrayList.wrap(new double[]{0.5})}),
+        new Record(new Object[]{"b", LongArrayList.wrap(new long[]{3L}), DoubleArrayList.wrap(new double[0])}));
+    Table table = mock(Table.class);
+    when(table.getDataSchema()).thenReturn(schema);
+    when(table.size()).thenReturn(records.size());
+    when(table.iterator()).thenAnswer(inv -> records.iterator());
+    GroupByResultsBlock groupByBlock = new GroupByResultsBlock(table, queryContext);
+    InstanceResponseBlock metadataBlock = new InstanceResponseBlock(new MetadataResultsBlock());
+    QueryExecutor queryExecutor = mockQueryExecutor(List.of(groupByBlock), metadataBlock);
+    LeafOperator operator =
+        new LeafOperator(OperatorTestUtil.getTracingContext(), mockQueryRequests(1), schema, queryExecutor,
+            _executorService);
+    _operatorRef.set(operator);
+
+    // When: serialized as the gRPC mailbox does when the receiver is on another server
+    MseBlock resultBlock = operator.nextBlock();
+    List<Object[]> rows = ((MseBlock.Data) resultBlock).asSerialized().asRowHeap().getRows();
+
+    // Then:
+    assertEquals(rows.size(), 2);
+    assertEquals(rows.get(0), new Object[]{"a", new long[]{1L, 2L}, new double[]{0.5}});
+    assertEquals(rows.get(1), new Object[]{"b", new long[]{3L}, new double[0]});
     assertTrue(operator.nextBlock().isEos(), "Expected EOS after reading the group-by block");
 
     operator.close();

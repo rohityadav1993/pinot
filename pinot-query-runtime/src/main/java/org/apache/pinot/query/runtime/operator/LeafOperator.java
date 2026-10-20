@@ -729,7 +729,7 @@ public class LeafOperator extends MultiStageOperator implements ExplainableOpera
     assert resultRows != null && inputDataSchema != null;
     ColumnDataType[] inputStoredTypes = inputDataSchema.getStoredColumnDataTypes();
     ColumnDataType[] outputStoredTypes = _dataSchema.getStoredColumnDataTypes();
-    if (!Arrays.equals(inputStoredTypes, outputStoredTypes)) {
+    if (!Arrays.equals(inputStoredTypes, outputStoredTypes) || hasArrayType(outputStoredTypes)) {
       for (Object[] row : resultRows) {
         convertRow(row, inputStoredTypes, outputStoredTypes);
       }
@@ -737,11 +737,25 @@ public class LeafOperator extends MultiStageOperator implements ExplainableOpera
     return new RowHeapDataBlock(resultRows, _dataSchema, _requests.get(0).getQueryContext().getAggregationFunctions());
   }
 
+  private static boolean hasArrayType(ColumnDataType[] storedTypes) {
+    for (ColumnDataType storedType : storedTypes) {
+      if (storedType.isArray()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Converts the values whose stored type differs from the desired one. A list in an array column is converted even
+  /// when the stored types match: the final result of an array-returning aggregation (e.g. `ARRAY_AGG`,
+  /// `FUNNEL_COUNT`) is an `XxxArrayList` while the column is declared as the primitive array type, and the data block
+  /// serializer only accepts the primitive array.
   public static void convertRow(Object[] row, ColumnDataType[] inputStoredTypes, ColumnDataType[] outputStoredTypes) {
     int numColumns = row.length;
     for (int colId = 0; colId < numColumns; colId++) {
       Object value = row[colId];
-      if (value != null && inputStoredTypes[colId] != outputStoredTypes[colId]) {
+      if (value != null && (inputStoredTypes[colId] != outputStoredTypes[colId] || (outputStoredTypes[colId].isArray()
+          && value instanceof List))) {
         row[colId] = TypeUtils.convert(value, outputStoredTypes[colId]);
       }
     }
