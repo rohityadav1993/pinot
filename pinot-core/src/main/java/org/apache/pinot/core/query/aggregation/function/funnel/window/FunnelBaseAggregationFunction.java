@@ -311,6 +311,99 @@ public abstract class FunnelBaseAggregationFunction<F extends Comparable>
     }
   }
 
+  /// The deepest step reached by any window of `stepEvents` and the start timestamp of the first window that reached
+  /// it; shared by the max-step funnel functions so the window scan exists once. Only a strict improvement moves the
+  /// entry, so on ties the earliest window wins. `stepEvents` is not modified.
+  protected final MaxStep findMaxStep(@Nullable PriorityQueue<FunnelStepEvent> stepEvents) {
+    int finalMaxStep = 0;
+    long entryTimestamp = MaxStep.NO_ENTRY;
+    if (stepEvents != null && !stepEvents.isEmpty()) {
+      stepEvents = new PriorityQueue<>(stepEvents);
+      ArrayDeque<FunnelStepEvent> slidingWindow = new ArrayDeque<>();
+      while (!stepEvents.isEmpty()) {
+        fillWindow(stepEvents, slidingWindow);
+        if (slidingWindow.isEmpty()) {
+          break;
+        }
+        int maxSteps = processMaxStepWindow(slidingWindow);
+        if (maxSteps > finalMaxStep) {
+          finalMaxStep = maxSteps;
+          entryTimestamp = slidingWindow.peek().getTimestamp();
+        }
+        if (finalMaxStep == _numSteps) {
+          break;
+        }
+        if (!slidingWindow.isEmpty()) {
+          slidingWindow.pollFirst();
+        }
+      }
+    }
+    return new MaxStep(finalMaxStep, entryTimestamp);
+  }
+
+  /// The deepest step one window reaches, honoring the funnel modes. The window's first event is a first-step event.
+  protected final int processMaxStepWindow(ArrayDeque<FunnelStepEvent> slidingWindow) {
+    int maxStep = 0;
+    long previousTimestamp = -1;
+    int numEventsProcessed = 0;
+    for (FunnelStepEvent event : slidingWindow) {
+      QueryThreadContext.checkTerminationAndSampleUsagePeriodically(numEventsProcessed++,
+          "FunnelBaseAggregationFunction#processMaxStepWindow");
+      int currentEventStep = event.getStep();
+      // If the same condition holds for the sequence of events, then such repeating event interrupts further
+      // processing.
+      if (_modes.hasStrictDeduplication()) {
+        if (currentEventStep == maxStep - 1) {
+          return maxStep;
+        }
+      }
+      // Don't allow interventions of other events. E.g. in the case of A->B->D->C, it stops finding A->B->C at the D
+      // and the max event level is 2.
+      if (_modes.hasStrictOrder()) {
+        if (currentEventStep != maxStep) {
+          return maxStep;
+        }
+      }
+      // Apply conditions only to events with strictly increasing timestamps.
+      if (_modes.hasStrictIncrease()) {
+        if (previousTimestamp == event.getTimestamp()) {
+          continue;
+        }
+      }
+      if (maxStep == currentEventStep) {
+        maxStep++;
+        previousTimestamp = event.getTimestamp();
+      }
+      if (maxStep == _numSteps) {
+        break;
+      }
+    }
+    return maxStep;
+  }
+
+  /// Outcome of [#findMaxStep]: the deepest step and the start timestamp of the window that first reached it
+  /// ([#NO_ENTRY] when no step was reached). Immutable.
+  protected static final class MaxStep {
+    /// Placeholder for the entry timestamp when no step was reached.
+    public static final long NO_ENTRY = Long.MIN_VALUE;
+
+    private final int _step;
+    private final long _entryTimestamp;
+
+    private MaxStep(int step, long entryTimestamp) {
+      _step = step;
+      _entryTimestamp = entryTimestamp;
+    }
+
+    public int getStep() {
+      return _step;
+    }
+
+    public long getEntryTimestamp() {
+      return _entryTimestamp;
+    }
+  }
+
   @Override
   public String toExplainString() {
     //@formatter:off
