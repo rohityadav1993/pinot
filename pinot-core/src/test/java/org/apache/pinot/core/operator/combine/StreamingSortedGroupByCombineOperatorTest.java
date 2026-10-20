@@ -968,6 +968,86 @@ public class StreamingSortedGroupByCombineOperatorTest {
     }
   }
 
+  /// Null keys across partitions. A null row holds the column default value, so the segment records the partition of
+  /// that value next to its own stream partition: a segment with nulls outside the default value's partition reports
+  /// several partitions and forces one merge group, and the null group can therefore come out of at most one merge
+  /// group. Both shapes must emit the null group exactly once (last, when there is one merge group).
+  @Test
+  public void testNullKeysInSeveralPartitionsAreOneGroup()
+      throws Exception {
+    int nullPartition = new ModuloPartitionFunction(NUM_PARTITIONS, null)
+        .getPartition(String.valueOf(FieldSpec.DEFAULT_DIMENSION_NULL_VALUE_OF_INT));
+    int otherPartition = (nullPartition + 1) % NUM_PARTITIONS;
+    // Nulls only in the default value's partition: the partitions stay separate merge groups
+    assertNullGroupOnce(List.of(nullPartition), NUM_PARTITIONS, 1);
+    // Nulls in two partitions (one of them foreign to the default value): the spanning segment makes one merge group
+    assertNullGroupOnce(List.of(nullPartition, otherPartition), 1, 2);
+    // Nulls in two partitions, none of them the default value's
+    assertNullGroupOnce(List.of(otherPartition, (otherPartition + 1) % NUM_PARTITIONS), 1, 2);
+  }
+
+  /// One consuming segment per partition in `nullPartitions` (null handling on, two null rows each), plus the two
+  /// immutable segments of every other partition, which carry no nulls.
+  private void assertNullGroupOnce(List<Integer> nullPartitions, int expectedMergeGroups, int numNullSegments)
+      throws Exception {
+    List<MutableSegmentImpl> consuming = new ArrayList<>();
+    try {
+      List<IndexSegment> segments = new ArrayList<>();
+      for (int partition : nullPartitions) {
+        MutableSegmentImpl segment = MutableSegmentImplTestUtils.createMutableSegmentImpl(SCHEMA, KEY_COL,
+            new ModuloPartitionFunction(NUM_PARTITIONS, null), partition, false, true);
+        consuming.add(segment);
+        for (GenericRow row : partitionRows(partition, NUM_PARTITIONS, 0, 40, 20 + partition)) {
+          segment.index(row, null);
+        }
+        segment.index(nullKeyRow(1 + partition, 700 + partition), null);
+        segment.index(nullKeyRow(3 + partition, 800 + partition), null);
+        segments.add(segment);
+      }
+      for (int partition = 0; partition < NUM_PARTITIONS; partition++) {
+        if (!nullPartitions.contains(partition)) {
+          segments.add(_partitionedSortedSegments.get(partition * 2));
+          segments.add(_partitionedSortedSegments.get(partition * 2 + 1));
+        }
+      }
+      long expectedNullSum = 0;
+      for (int partition : nullPartitions) {
+        expectedNullSum += 700L + partition + 800 + partition;
+      }
+      String nullHandling = "SET enableNullHandling=true; ";
+      for (String options : new String[]{"", "SET serverReturnFinalResult=true; "}) {
+        for (int blockSize : new int[]{0, 3}) {
+          String query = nullHandling + options + "SELECT key, COUNT(*), SUM(val), MIN(val), MAX(val) FROM testTable "
+              + "GROUP BY key" + BIG_LIMIT;
+          Result on = assertParity(segments, query, blockSize);
+          assertTrue(on._queryContext.isSortedGroupByEnabled());
+          assertEquals(on._combine.getClass(), StreamingSortedGroupByCombineOperator.class);
+          assertEquals(explainLong(on, "numMergeGroups"), (long) expectedMergeGroups, "partitions " + nullPartitions);
+          assertEquals(on._rows.stream().filter(row -> row[0] == null).count(), 1L,
+              "exactly one null group in " + query);
+          if (expectedMergeGroups == 1) {
+            assertNull(on._rows.get(on._rows.size() - 1)[0], "the null group is emitted last");
+          }
+          for (Object[] row : on._rows) {
+            if (row[0] == null) {
+              assertEquals((long) (Long) row[1], 2L * numNullSegments);
+              assertEquals((double) (Double) row[2], (double) expectedNullSum);
+            }
+          }
+          List<Object> keys = new ArrayList<>();
+          for (Object[] row : on._rows) {
+            assertFalse(keys.contains(row[0]), "Key emitted twice: " + row[0]);
+            keys.add(row[0]);
+          }
+        }
+      }
+    } finally {
+      for (MutableSegmentImpl segment : consuming) {
+        segment.destroy();
+      }
+    }
+  }
+
   @Test
   public void testNoPartitionMetadataIsOneMergeGroup() {
     Result on = assertParity(_sortedSegments, QUERY, 0);
