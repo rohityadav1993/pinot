@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.PriorityQueue;
 import java.util.Random;
 import java.util.Set;
 import java.util.TreeSet;
@@ -46,6 +47,7 @@ import org.apache.pinot.core.plan.CombinePlanNode;
 import org.apache.pinot.core.plan.PlanNode;
 import org.apache.pinot.core.plan.maker.InstancePlanMakerImplV2;
 import org.apache.pinot.core.plan.maker.PlanMaker;
+import org.apache.pinot.core.query.aggregation.function.AggregationFunction;
 import org.apache.pinot.core.query.request.context.QueryContext;
 import org.apache.pinot.core.query.request.context.utils.QueryContextConverterUtils;
 import org.apache.pinot.segment.local.indexsegment.immutable.ImmutableSegmentLoader;
@@ -101,6 +103,7 @@ public class StreamingSortedGroupByCombineOperatorTest {
   private static final int NUM_DISTINCT_KEYS = (NUM_SEGMENTS - 1) * KEY_STRIDE + KEYS_PER_SEGMENT;
 
   private static final int NUM_PARTITIONS = 4;
+  private static final int NUM_FUNNEL_USERS = 60;
   private static final String AGGS = "COUNT(*), SUM(val), MIN(val), MAX(val)";
   /// A LIMIT at or above numGroupsLimit cannot trim at the leaf; the default LIMIT 10 would (see the gate).
   private static final String BIG_LIMIT = " LIMIT 1000000";
@@ -134,6 +137,9 @@ public class StreamingSortedGroupByCombineOperatorTest {
   /// Segments that carry null keys next to a real key equal to the null default value, built with null handling
   private List<IndexSegment> _nullBearingSortedSegments;
   private IndexSegment _nullBearingUnsortedSegment;
+  /// Three sorted segments of funnel events (key = user, other = step type, val = timestamp); every user's events
+  /// are spread over all three, so each group spans segments
+  private List<IndexSegment> _funnelSegments;
 
   @BeforeClass
   public void setUp()
@@ -186,6 +192,22 @@ public class StreamingSortedGroupByCombineOperatorTest {
     List<GenericRow> nullUnsortedRows = nullBearingSortedRows(3, 9, 900);
     Collections.shuffle(nullUnsortedRows, new Random(7));
     _nullBearingUnsortedSegment = buildSegment(UNSORTED_TABLE_CONFIG, "nullUnsorted_0", nullUnsortedRows, true);
+
+    _funnelSegments = new ArrayList<>();
+    List<List<GenericRow>> funnelRows = List.of(new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
+    Random funnelRandom = new Random(2024);
+    for (int user = 0; user < NUM_FUNNEL_USERS; user++) {
+      int numEvents = 1 + funnelRandom.nextInt(10);
+      for (int e = 0; e < numEvents; e++) {
+        // Step types 1-3 form the funnel, 4 is noise; timestamps collide now and then (STRICT_INCREASE)
+        funnelRows.get(funnelRandom.nextInt(3))
+            .add(row(user, 1 + funnelRandom.nextInt(4), funnelRandom.nextInt(40) * 5L));
+      }
+    }
+    for (int i = 0; i < 3; i++) {
+      // Rows are appended user by user, so each segment is sorted by key
+      _funnelSegments.add(buildSegment(SORTED_TABLE_CONFIG, "funnel_" + i, funnelRows.get(i)));
+    }
   }
 
   @AfterClass
@@ -210,6 +232,9 @@ public class StreamingSortedGroupByCombineOperatorTest {
       segment.destroy();
     }
     _nullBearingUnsortedSegment.destroy();
+    for (IndexSegment segment : _funnelSegments) {
+      segment.destroy();
+    }
     FileUtils.deleteDirectory(TEMP_DIR);
   }
 
@@ -872,6 +897,94 @@ public class StreamingSortedGroupByCombineOperatorTest {
     Result on = assertParity(_sortedSegments, "SET enableNullHandling=true; " + QUERY, 0);
     assertEngaged(on);
     assertStrictlyAscendingKeys(on._rows);
+  }
+
+  // ---------------------------------------------------------------------------------------------------------------
+  // Funnel functions: OFF vs ON vs AUTO
+  // ---------------------------------------------------------------------------------------------------------------
+
+  private static final String[] FUNNEL_MODES =
+      {"", ", 'STRICT_ORDER'", ", 'STRICT_INCREASE'", ", 'STRICT_DEDUPLICATION'", ", 'KEEP_ALL'",
+          ", 'STRICT_ORDER', 'STRICT_INCREASE'", ", 'STRICT_DEDUPLICATION', 'STRICT_INCREASE'"};
+
+  /// Rows with every funnel intermediate cell reduced to something with value equality: its sorted event list and
+  /// the final result extracted from it. A final-result row is compared as it is.
+  private static List<String> canonicalFunnel(Result result) {
+    AggregationFunction[] functions = result._queryContext.getAggregationFunctions();
+    List<Object[]> rows = new ArrayList<>();
+    for (Object[] row : result._rows) {
+      Object[] canonical = row.clone();
+      for (int i = 0; i < functions.length; i++) {
+        Object cell = row[1 + i];
+        if (cell instanceof PriorityQueue) {
+          List<Object> events = new ArrayList<>((PriorityQueue<?>) cell);
+          events.sort(null);
+          canonical[1 + i] = events + " -> " + functions[i].extractFinalResult(cell);
+        }
+      }
+      rows.add(canonical);
+    }
+    return canonical(rows);
+  }
+
+  /// OFF, ON and AUTO give the same rows for `query` over the funnel segments. Returns the ON result.
+  private Result assertFunnelParity(String query, int blockSize) {
+    Result off = run(_funnelSegments, query, blockSize);
+    Result on = run(_funnelSegments, "SET sortedGroupByMode='ON'; " + query, blockSize);
+    Result auto = run(_funnelSegments, "SET sortedGroupByMode='AUTO'; " + query, blockSize);
+    assertFalse(off._combine instanceof StreamingSortedGroupByCombineOperator);
+    assertEngaged(on);
+    assertEngaged(auto);
+    assertEquals(canonicalFunnel(on), canonicalFunnel(off), "ON differs from OFF for: " + query);
+    assertEquals(canonicalFunnel(auto), canonicalFunnel(off), "AUTO differs from OFF for: " + query);
+    assertEquals(on._schema, off._schema, "ON and OFF schemas differ for: " + query);
+    assertEquals(auto._schema, off._schema, "AUTO and OFF schemas differ for: " + query);
+    assertEveryKeyOnce(on._rows);
+    assertEquals(on._rows.size(), NUM_FUNNEL_USERS);
+    return on;
+  }
+
+  private void assertFunnelParityForAllModes(String function) {
+    for (String maxStepDuration : new String[]{"", ", 'maxStepDuration=15'"}) {
+      for (String mode : FUNNEL_MODES) {
+        String call = function + "(val, 60, 3, other = 1, other = 2, other = 3" + mode + maxStepDuration + ")";
+        String query = "SELECT key, " + call + ", COUNT(*) FROM testTable GROUP BY key" + BIG_LIMIT;
+        // Intermediate results (the funnel event queues), small blocks, and final results
+        assertFunnelParity(query, 4);
+        assertFunnelParity("SET serverReturnFinalResult=true; " + query, 0);
+      }
+    }
+  }
+
+  @Test
+  public void testFunnelMaxStepMatchesOffAcrossSegmentsInEveryMode() {
+    assertFunnelParityForAllModes("FUNNEL_MAX_STEP");
+    // The fixture must actually exercise several depths, or the parity would be vacuous
+    Result final1 = run(_funnelSegments, "SET sortedGroupByMode='ON'; SET serverReturnFinalResult=true; "
+        + "SELECT key, FUNNEL_MAX_STEP(val, 60, 3, other = 1, other = 2, other = 3) FROM testTable GROUP BY key"
+        + BIG_LIMIT, 0);
+    assertTrue(final1._rows.stream().map(row -> row[1]).distinct().count() >= 3,
+        "Expected several distinct max steps: " + canonicalFunnel(final1));
+  }
+
+  @Test
+  public void testFunnelMaxStepWithEntryMatchesOffAcrossSegmentsInEveryMode() {
+    assertFunnelParityForAllModes("FUNNEL_MAX_STEP_WITH_ENTRY");
+    Result final1 = run(_funnelSegments, "SET sortedGroupByMode='ON'; SET serverReturnFinalResult=true; "
+        + "SELECT key, FUNNEL_MAX_STEP_WITH_ENTRY(val, 60, 3, other = 1, other = 2, other = 3) FROM testTable "
+        + "GROUP BY key" + BIG_LIMIT, 0);
+    assertTrue(final1._rows.stream().map(row -> row[1]).distinct().count() >= 5,
+        "Expected several distinct [maxStep, entry] results: " + canonicalFunnel(final1));
+  }
+
+  /// Both funnel functions and the plain aggregations in one query, merged over the same groups.
+  @Test
+  public void testFunnelsNextToPlainAggregationsMatchOff() {
+    String query = "SELECT key, COUNT(*), FUNNEL_MAX_STEP(val, 60, 3, other = 1, other = 2, other = 3, 'STRICT_ORDER'), "
+        + "SUM(val), FUNNEL_MAX_STEP_WITH_ENTRY(val, 60, 3, other = 1, other = 2, other = 3, 'KEEP_ALL'), MIN(val), "
+        + "MAX(val) FROM testTable GROUP BY key" + BIG_LIMIT;
+    assertFunnelParity(query, 3);
+    assertFunnelParity("SET serverReturnFinalResult=true; " + query, 0);
   }
 
   // ---------------------------------------------------------------------------------------------------------------
