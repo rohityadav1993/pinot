@@ -1006,9 +1006,10 @@ public class CommonConstants {
         ///
         /// **Modes.** `OFF` never uses it. `ON` uses it whenever the query shape qualifies, and otherwise runs the
         /// existing hash GROUP BY with identical results. `AUTO` is `ON` only when at least the sorted-segment ratio
-        /// of the queried segments is sorted on the group-by column (default 0.8, option
-        /// [#SORTED_SELECTION_MERGE_AUTO_MIN_SORTED_RATIO]), since only sorted segments avoid the hash aggregation;
-        /// below it, `AUTO` falls back to the existing path. An unknown value fails the query.
+        /// of the queried segments is sorted on the group-by column, since only sorted segments avoid the hash
+        /// aggregation; below it, `AUTO` falls back to the existing path. The threshold is not a separate setting: it
+        /// reuses the streaming selection ORDER BY's [#SORTED_SELECTION_MERGE_AUTO_MIN_SORTED_RATIO] option (and its
+        /// default, 0.8), so changing that option changes both features. An unknown value fails the query.
         ///
         /// **When it engages.** Only on the streaming instance plan, which is what a multi-stage engine leaf stage
         /// uses; the single-stage engine ignores the option. The query must `GROUP BY` exactly one plain column with
@@ -1016,8 +1017,10 @@ public class CommonConstants {
         /// limit (a multi-stage leaf has none unless the planner pushed one down). No segment disqualifies the
         /// request: an immutable segment that is sorted on the column, single-value and dictionary-encoded is read in
         /// document order; every other segment (unsorted, consuming, raw-encoded) runs the existing per-segment hash
-        /// aggregation, sorts its groups by key and joins the same merge. The groups limit still applies to those
-        /// hash-aggregated segments, but not to the sorted ones.
+        /// aggregation, sorts its groups by key and joins the same merge. The per-segment groups limit still applies
+        /// to those hash-aggregated segments (a segment with more groups than the limit drops the excess, exactly as
+        /// on the existing path, and the numGroupsLimitReached flag it raises is carried on the output), but not to the
+        /// sorted segments, which never build a group-key map and so are never limited.
         ///
         /// **Null keys.** With null handling on, rows with a null key form one group of their own, merged across
         /// segments and emitted last, so a real key equal to the column's default value is never merged with nulls.
@@ -1803,8 +1806,9 @@ public class CommonConstants {
       /// Use the sorted streaming GROUP BY whenever the query shape qualifies; otherwise fall back to the existing
       /// path. Segments that are not sorted on the key hash-aggregate and sort their groups.
       ON,
-      /// Engage like [#ON], but only when at least the sorted-segment ratio
-      /// ([Broker.Request.QueryOptionKey#SORTED_SELECTION_MERGE_AUTO_MIN_SORTED_RATIO]) of the queried segments are
+      /// Engage like [#ON], but only when at least the sorted-segment ratio (the same
+      /// [Broker.Request.QueryOptionKey#SORTED_SELECTION_MERGE_AUTO_MIN_SORTED_RATIO] option the streaming selection
+      /// ORDER BY uses, not a separate one) of the queried segments are
       /// sorted on the group-by column, since only sorted segments avoid the hash aggregation; otherwise fall back.
       AUTO
     }
