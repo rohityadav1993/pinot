@@ -36,8 +36,8 @@ import org.apache.pinot.segment.spi.AggregationFunctionType;
 ///   entry, so on ties the earliest window wins. When `maxStep` is 0 there is no entry and `entryTs` is
 ///   [#NO_ENTRY] (`Long.MIN_VALUE`).
 ///
-/// The intermediate result, its serialization, `merge()`, `fillWindow()` and the per-window step logic are reused
-/// unchanged from the ordered-funnel base, whose window scan (`findMaxStep`) `FUNNEL_MAX_STEP` shares. Because both values come from one
+/// The intermediate result, its serialization, `merge()`, `fillWindow()`, the per-window step logic and the window
+/// scan (`findMaxStep`) are the ordered-funnel base's, shared with `FUNNEL_MAX_STEP`. Because both values come from one
 /// scan, they always describe the same chain. Instances are stateless after construction and thread-safe.
 public class FunnelMaxStepWithEntryAggregationFunction extends FunnelBaseAggregationFunction<LongArrayList> {
   /// Placeholder for the entry timestamp when no step was reached.

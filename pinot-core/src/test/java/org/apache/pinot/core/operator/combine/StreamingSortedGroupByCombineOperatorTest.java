@@ -1021,8 +1021,9 @@ public class StreamingSortedGroupByCombineOperatorTest {
   /// Both funnel functions and the plain aggregations in one query, merged over the same groups.
   @Test
   public void testFunnelsNextToPlainAggregationsMatchOff() {
-    String query = "SELECT key, COUNT(*), FUNNEL_MAX_STEP(val, 60, 3, other = 1, other = 2, other = 3, 'STRICT_ORDER'), "
-        + "SUM(val), FUNNEL_MAX_STEP_WITH_ENTRY(val, 60, 3, other = 1, other = 2, other = 3, 'KEEP_ALL'), MIN(val), "
+    String query = "SELECT key, COUNT(*), "
+        + "FUNNEL_MAX_STEP(val, 60, 3, other = 1, other = 2, other = 3, 'STRICT_ORDER'), SUM(val), "
+        + "FUNNEL_MAX_STEP_WITH_ENTRY(val, 60, 3, other = 1, other = 2, other = 3, 'KEEP_ALL'), MIN(val), "
         + "MAX(val) FROM testTable GROUP BY key" + BIG_LIMIT;
     assertFunnelParity(query, 3);
     assertFunnelParity("SET serverReturnFinalResult=true; " + query, 0);
