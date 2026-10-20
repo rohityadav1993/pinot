@@ -18,7 +18,6 @@
  */
 package org.apache.pinot.core.query.aggregation.function.funnel.window;
 
-import java.util.ArrayDeque;
 import java.util.List;
 import java.util.PriorityQueue;
 import javax.annotation.Nullable;
@@ -26,7 +25,6 @@ import org.apache.pinot.common.request.context.ExpressionContext;
 import org.apache.pinot.common.utils.DataSchema;
 import org.apache.pinot.core.query.aggregation.function.funnel.FunnelStepEvent;
 import org.apache.pinot.segment.spi.AggregationFunctionType;
-import org.apache.pinot.spi.query.QueryThreadContext;
 
 
 public class FunnelMaxStepAggregationFunction extends FunnelBaseAggregationFunction<Integer> {
@@ -47,66 +45,7 @@ public class FunnelMaxStepAggregationFunction extends FunnelBaseAggregationFunct
 
   @Override
   public Integer extractFinalResult(@Nullable PriorityQueue<FunnelStepEvent> stepEvents) {
-    int finalMaxStep = 0;
-    if (stepEvents == null || stepEvents.isEmpty()) {
-      return finalMaxStep;
-    }
-    stepEvents = new PriorityQueue<>(stepEvents);
-    ArrayDeque<FunnelStepEvent> slidingWindow = new ArrayDeque<>();
-    while (!stepEvents.isEmpty()) {
-      fillWindow(stepEvents, slidingWindow);
-      if (slidingWindow.isEmpty()) {
-        break;
-      }
-      int maxSteps = processWindow(slidingWindow);
-      finalMaxStep = Math.max(finalMaxStep, maxSteps);
-      if (finalMaxStep == _numSteps) {
-        break;
-      }
-      if (!slidingWindow.isEmpty()) {
-        slidingWindow.pollFirst();
-      }
-    }
-    return finalMaxStep;
-  }
-
-  protected Integer processWindow(ArrayDeque<FunnelStepEvent> slidingWindow) {
-    int maxStep = 0;
-    long previousTimestamp = -1;
-    int numEventsProcessed = 0;
-    for (FunnelStepEvent event : slidingWindow) {
-      QueryThreadContext.checkTerminationAndSampleUsagePeriodically(numEventsProcessed++,
-          "FunnelMaxStepAggregationFunction#processWindow");
-      int currentEventStep = event.getStep();
-      // If the same condition holds for the sequence of events, then such repeating event interrupts further
-      // processing.
-      if (_modes.hasStrictDeduplication()) {
-        if (currentEventStep == maxStep - 1) {
-          return maxStep;
-        }
-      }
-      // Don't allow interventions of other events. E.g. in the case of A->B->D->C, it stops finding A->B->C at the D
-      // and the max event level is 2.
-      if (_modes.hasStrictOrder()) {
-        if (currentEventStep != maxStep) {
-          return maxStep;
-        }
-      }
-      // Apply conditions only to events with strictly increasing timestamps.
-      if (_modes.hasStrictIncrease()) {
-        if (previousTimestamp == event.getTimestamp()) {
-          continue;
-        }
-      }
-      if (maxStep == currentEventStep) {
-        maxStep++;
-        previousTimestamp = event.getTimestamp();
-      }
-      if (maxStep == _numSteps) {
-        break;
-      }
-    }
-    return maxStep;
+    return findMaxStep(stepEvents).getStep();
   }
 
   @Override

@@ -19,7 +19,6 @@
 package org.apache.pinot.core.query.aggregation.function.funnel.window;
 
 import it.unimi.dsi.fastutil.longs.LongArrayList;
-import java.util.ArrayDeque;
 import java.util.List;
 import java.util.PriorityQueue;
 import javax.annotation.Nullable;
@@ -38,18 +37,14 @@ import org.apache.pinot.segment.spi.AggregationFunctionType;
 ///   [#NO_ENTRY] (`Long.MIN_VALUE`).
 ///
 /// The intermediate result, its serialization, `merge()`, `fillWindow()` and the per-window step logic are reused
-/// unchanged from the ordered-funnel base and [FunnelMaxStepAggregationFunction]. Because both values come from one
+/// unchanged from the ordered-funnel base, whose window scan (`findMaxStep`) `FUNNEL_MAX_STEP` shares. Because both values come from one
 /// scan, they always describe the same chain. Instances are stateless after construction and thread-safe.
 public class FunnelMaxStepWithEntryAggregationFunction extends FunnelBaseAggregationFunction<LongArrayList> {
   /// Placeholder for the entry timestamp when no step was reached.
-  public static final long NO_ENTRY = Long.MIN_VALUE;
-
-  /// Supplies the per-window step logic so it is shared with, not copied from, `FUNNEL_MAX_STEP`.
-  private final FunnelMaxStepAggregationFunction _maxStepFunction;
+  public static final long NO_ENTRY = MaxStep.NO_ENTRY;
 
   public FunnelMaxStepWithEntryAggregationFunction(List<ExpressionContext> arguments, boolean nullHandlingEnabled) {
     super(arguments, nullHandlingEnabled);
-    _maxStepFunction = new FunnelMaxStepAggregationFunction(arguments, nullHandlingEnabled);
   }
 
   @Override
@@ -64,30 +59,8 @@ public class FunnelMaxStepWithEntryAggregationFunction extends FunnelBaseAggrega
 
   @Override
   public LongArrayList extractFinalResult(@Nullable PriorityQueue<FunnelStepEvent> stepEvents) {
-    int finalMaxStep = 0;
-    long entryTs = NO_ENTRY;
-    if (stepEvents != null && !stepEvents.isEmpty()) {
-      stepEvents = new PriorityQueue<>(stepEvents);
-      ArrayDeque<FunnelStepEvent> slidingWindow = new ArrayDeque<>();
-      while (!stepEvents.isEmpty()) {
-        fillWindow(stepEvents, slidingWindow);
-        if (slidingWindow.isEmpty()) {
-          break;
-        }
-        int maxSteps = _maxStepFunction.processWindow(slidingWindow);
-        if (maxSteps > finalMaxStep) {
-          finalMaxStep = maxSteps;
-          entryTs = slidingWindow.peek().getTimestamp();
-        }
-        if (finalMaxStep == _numSteps) {
-          break;
-        }
-        if (!slidingWindow.isEmpty()) {
-          slidingWindow.pollFirst();
-        }
-      }
-    }
-    return LongArrayList.wrap(new long[]{finalMaxStep, entryTs});
+    MaxStep maxStep = findMaxStep(stepEvents);
+    return LongArrayList.wrap(new long[]{maxStep.getStep(), maxStep.getEntryTimestamp()});
   }
 
   /// Keeps the deeper result; on equal depth keeps the earlier entry.
