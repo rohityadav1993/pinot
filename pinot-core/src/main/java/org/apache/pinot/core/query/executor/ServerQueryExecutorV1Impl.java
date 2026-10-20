@@ -385,6 +385,8 @@ public class ServerQueryExecutorV1Impl implements QueryExecutor {
         execute(selectedSegmentsInfo.getIndexSegments(), queryContext, timerContext, executorService, streamer,
             enableStreaming, selectedSegmentsInfo.getSelectedSegmentContexts(), planMakerOverride);
 
+    addSortedGroupByStats(instanceResponse, queryContext);
+
     // Update the total docs in the metadata based on the un-pruned segments
     instanceResponse.addMetadata(MetadataKey.TOTAL_DOCS.getName(),
         Long.toString(selectedSegmentsInfo.getNumTotalDocs()));
@@ -395,6 +397,17 @@ public class ServerQueryExecutorV1Impl implements QueryExecutor {
     addPrunerStats(instanceResponse, selectedSegmentsInfo.getPrunerStats());
 
     return instanceResponse;
+  }
+
+  /// Reports whether the sorted streaming GROUP BY engaged, or why it did not when it was requested. The plan maker
+  /// resolves the mode on the query context before the plan is built, so this is read after execution.
+  private static void addSortedGroupByStats(InstanceResponseBlock instanceResponse, QueryContext queryContext) {
+    if (queryContext.isSortedGroupByEnabled()) {
+      instanceResponse.addMetadata(MetadataKey.SORTED_GROUP_BY_ENGAGED.getName(), "true");
+    } else if (queryContext.getSortedGroupByFallbackReason() != null) {
+      instanceResponse.addMetadata(MetadataKey.SORTED_GROUP_BY_FALLBACK_REASON.getName(),
+          queryContext.getSortedGroupByFallbackReason());
+    }
   }
 
   /// Get a mapping of explain plan depth to a unique list of explain plans for each depth
