@@ -49,6 +49,7 @@ import org.apache.pinot.core.plan.maker.InstancePlanMakerImplV2;
 import org.apache.pinot.core.plan.maker.PlanMaker;
 import org.apache.pinot.core.query.aggregation.function.AggregationFunction;
 import org.apache.pinot.core.query.request.context.QueryContext;
+import org.apache.pinot.core.query.request.context.SortedGroupByDecision;
 import org.apache.pinot.core.query.request.context.utils.QueryContextConverterUtils;
 import org.apache.pinot.segment.local.indexsegment.immutable.ImmutableSegmentLoader;
 import org.apache.pinot.segment.local.indexsegment.mutable.MutableSegmentImpl;
@@ -352,7 +353,10 @@ public class StreamingSortedGroupByCombineOperatorTest {
     PLAN_MAKER.makeStreamingInstancePlan(segmentContexts, queryContext, EXECUTOR, block -> {
     });
     if (blockSize > 0) {
-      queryContext.setSortedGroupByBlockSize(blockSize);
+      SortedGroupByDecision decision = queryContext.getSortedGroupByDecision();
+      if (decision != null) {
+        queryContext.setSortedGroupByDecision(decision.withBlockSize(blockSize));
+      }
     }
     List<PlanNode> planNodes = new ArrayList<>();
     for (SegmentContext segmentContext : segmentContexts) {
@@ -442,7 +446,7 @@ public class StreamingSortedGroupByCombineOperatorTest {
   /// Engaged, with the given number of segments on the sorted fast path and on the hash-then-sort path.
   private static void assertEngaged(Result result, int expectedSorted, int expectedHash) {
     assertTrue(result._queryContext.isSortedGroupByEnabled());
-    assertNull(result._queryContext.getSortedGroupByFallbackReason());
+    assertNull(fallbackReason(result._queryContext));
     assertEquals(result._combine.getClass(), StreamingSortedGroupByCombineOperator.class);
     int numSorted = 0;
     int numHash = 0;
@@ -465,11 +469,21 @@ public class StreamingSortedGroupByCombineOperatorTest {
     return result._combine.getExplainInfo().getAttributes();
   }
 
+  private static String fallbackReason(QueryContext queryContext) {
+    SortedGroupByDecision decision = queryContext.getSortedGroupByDecision();
+    return decision == null ? null : decision.getFallbackDetail();
+  }
+
+  private static String description(QueryContext queryContext) {
+    SortedGroupByDecision decision = queryContext.getSortedGroupByDecision();
+    return decision == null ? null : decision.getDescription();
+  }
+
   private static void assertNotEngaged(Result result, String expectedReasonFragment) {
     assertFalse(result._queryContext.isSortedGroupByEnabled());
-    assertNotNull(result._queryContext.getSortedGroupByFallbackReason());
-    assertTrue(result._queryContext.getSortedGroupByFallbackReason().contains(expectedReasonFragment),
-        "Reason was: " + result._queryContext.getSortedGroupByFallbackReason());
+    assertNotNull(fallbackReason(result._queryContext));
+    assertTrue(fallbackReason(result._queryContext).contains(expectedReasonFragment),
+        "Reason was: " + fallbackReason(result._queryContext));
     assertFalse(result._combine instanceof StreamingSortedGroupByCombineOperator);
   }
 
@@ -585,7 +599,7 @@ public class StreamingSortedGroupByCombineOperatorTest {
   public void testOffByDefaultReportsExistingPath() {
     Result off = run(_sortedSegments, QUERY, 0);
     assertFalse(off._queryContext.isSortedGroupByEnabled());
-    assertNull(off._queryContext.getSortedGroupByFallbackReason(), "Never requested, so nothing to explain");
+    assertNull(fallbackReason(off._queryContext), "Never requested, so nothing to explain");
     assertFalse(off._combine instanceof StreamingSortedGroupByCombineOperator);
   }
 
@@ -734,8 +748,8 @@ public class StreamingSortedGroupByCombineOperatorTest {
         assertStrictlyAscendingKeys(on._rows);
         assertEquals(explain(on).get("numMergeGroups").getLong(), 1L);
         assertFalse(explain(on).get("parallel").getBool());
-        assertTrue(on._queryContext.getSortedGroupByDecision().contains("5/7 segments sorted"),
-            on._queryContext.getSortedGroupByDecision());
+        assertTrue(description(on._queryContext).contains("5/7 segments sorted"),
+            description(on._queryContext));
       }
       // Final results as well: a hash-then-sort group is final-converted exactly like a sorted one
       assertEngaged(assertParity(segments, "SET serverReturnFinalResult=true; SELECT key, SUM(val), AVG(val), "
@@ -786,7 +800,7 @@ public class StreamingSortedGroupByCombineOperatorTest {
     // 5 of 6 sorted = 0.83 >= the 0.8 default
     Result auto = run(segments, "SET sortedGroupByMode='AUTO'; " + QUERY, 0);
     assertEngaged(auto, NUM_SEGMENTS, 1);
-    assertEquals(explain(auto).get("decision").getString(), auto._queryContext.getSortedGroupByDecision());
+    assertEquals(explain(auto).get("decision").getString(), description(auto._queryContext));
     assertTrue(explain(auto).get("decision").getString().startsWith("AUTO: 5/6 segments sorted (ratio 0.83 >= "),
         explain(auto).get("decision").getString());
     assertEquals(canonical(auto._rows), canonical(run(segments, QUERY, 0)._rows));
@@ -810,7 +824,7 @@ public class StreamingSortedGroupByCombineOperatorTest {
     segments.add(_unsortedSegment);
     Result auto = run(segments, "SET sortedGroupByMode='AUTO'; " + QUERY, 0);
     assertNotEngaged(auto, "AUTO: 3/6 segments sorted (ratio 0.50 < threshold 0.80)");
-    assertEquals(auto._queryContext.getSortedGroupByDecision(), auto._queryContext.getSortedGroupByFallbackReason());
+    assertEquals(description(auto._queryContext), fallbackReason(auto._queryContext));
     // Falling back runs the existing path, with identical results
     assertEquals(canonical(auto._rows), canonical(run(segments, QUERY, 0)._rows));
     // ON engages regardless of the ratio
@@ -822,7 +836,7 @@ public class StreamingSortedGroupByCombineOperatorTest {
     Result auto = run(_sortedSegments, "SET sortedGroupByMode='AUTO'; SELECT key, COUNT(*) FROM testTable GROUP BY key "
         + "ORDER BY key LIMIT 5", 0);
     assertNotEngaged(auto, "ORDER BY");
-    assertNull(auto._queryContext.getSortedGroupByDecision());
+    assertNull(description(auto._queryContext));
   }
 
   // ---------------------------------------------------------------------------------------------------------------

@@ -104,7 +104,7 @@ public class StreamingSortedGroupByCombineOperator extends BaseStreamingCombineO
     _returnFinalResult =
         queryContext.isServerReturnFinalResult() || queryContext.isServerReturnFinalResultKeyUnpartitioned();
     _blockSize = queryContext.getSortedGroupByBlockSize();
-    _decision = queryContext.getSortedGroupByDecision();
+    _decision = queryContext.getSortedGroupByDecision().getDescription();
 
     _split = SortedGroupByPartitioning.split(operators, groupByExpressions.get(0).getIdentifier(),
         queryContext.getSchema());
