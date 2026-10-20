@@ -63,9 +63,11 @@ import org.apache.pinot.spi.query.QueryThreadContext;
 /// self-contained records inside the per-segment operator, on the thread that ran it, so no worker-thread-local
 /// group-key state ever crosses a thread (see `StreamingGroupByCombineOperator#detachFromWorkerThreadState`).
 ///
-/// **Null keys.** With null handling on, a null key sorts last and is an ordinary group of the merge. Partition
-/// metadata is stamped from the default value a null row holds, so every null row of a table sits in the partition of
-/// that default value, one group, and the groups stay disjoint.
+/// **Null keys.** With null handling on, a null key sorts last and is an ordinary group of the merge. A null row holds
+/// the column's default value, and every segment records the partition of each value it holds (a consuming segment
+/// adds the partition of a mismatching row to its set; an immutable segment derives its set from its column values).
+/// A segment with nulls outside the default value's partition therefore reports several partitions and forces one
+/// merge group, so the null group is only ever produced by one merge group and the groups stay disjoint.
 ///
 /// **Result kind.** When the leaf returns final results ([QueryContext#isServerReturnFinalResult()] or the key
 /// unpartitioned variant) each closed group's aggregation columns are converted with `extractFinalResult` and the
