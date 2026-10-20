@@ -446,6 +446,11 @@ public class InstancePlanMakerImplV2 implements PlanMaker {
       if (sortedGroupByMode != null) {
         queryContext.setSortedGroupByMode(sortedGroupByMode);
       }
+      // AUTO engages above the same sorted-segment ratio as the streaming selection ORDER BY
+      Double sortedGroupByAutoMinSortedRatio =
+          QueryOptionsUtils.getSortedSelectionMergeAutoMinSortedRatio(queryOptions);
+      queryContext.setSortedSelectionMergeAutoMinSortedRatio(sortedGroupByAutoMinSortedRatio != null
+          ? sortedGroupByAutoMinSortedRatio : _sortedSelectionMergeAutoMinSortedRatio);
       // Set streamingGroupByFlushThreshold
       Integer streamingGroupByFlushThreshold =
           QueryOptionsUtils.getStreamingGroupByFlushThreshold(queryOptions);
@@ -609,19 +614,37 @@ public class InstancePlanMakerImplV2 implements PlanMaker {
 
   /// Resolves the requested [SortedGroupByMode] to `ON` (engaged) or `OFF` before any plan node is built, because the
   /// combine needs every segment to supply a key-ordered stream and so the decision is all-or-nothing. A requested
-  /// `ON` that the query shape or any segment does not qualify for becomes `OFF` with the reason recorded on the
-  /// [QueryContext], and the existing GROUP BY path runs. `AUTO` is reserved for the metadata-driven decision and
-  /// currently resolves to `OFF`. Reads metadata only; acquires no segment.
+  /// mode that the query shape rules out becomes `OFF` with the reason recorded on the [QueryContext], and the
+  /// existing GROUP BY path runs. Every segment can join the merge (sorted ones stream, the rest hash-then-sort), so
+  /// `ON` otherwise engages, and `AUTO` engages when at least the sorted-segment ratio of the segments is sorted
+  /// (the same threshold option as the streaming selection ORDER BY, `sortedSelectionMergeAutoMinSortedRatio`), where
+  /// avoiding the hash aggregation pays off. The segment counts are recorded as the context's decision. Reads
+  /// metadata only; acquires no segment.
   private void resolveSortedGroupByMode(List<SegmentContext> segmentContexts, QueryContext queryContext) {
     SortedGroupByMode mode = queryContext.getSortedGroupByMode();
     if (mode == SortedGroupByMode.OFF) {
       return;
     }
-    String reason;
-    if (mode == SortedGroupByMode.AUTO) {
-      reason = "AUTO is not supported yet";
-    } else {
-      reason = StreamingSortedGroupByPlanNode.getFallbackReason(segmentContexts, queryContext);
+    String reason = StreamingSortedGroupByPlanNode.getFallbackReason(queryContext);
+    if (reason == null) {
+      int numSegments = segmentContexts.size();
+      int numSorted = StreamingSortedGroupByPlanNode.countSortedStreamable(segmentContexts, queryContext);
+      double sortedRatio = numSegments == 0 ? 0 : (double) numSorted / numSegments;
+      double minSortedRatio = queryContext.getSortedSelectionMergeAutoMinSortedRatio();
+      String decision =
+          String.format("%s: %d/%d segments sorted (ratio %.2f", mode, numSorted, numSegments, sortedRatio);
+      if (mode == SortedGroupByMode.AUTO) {
+        boolean enabled = sortedRatio >= minSortedRatio;
+        decision += String.format(" %s threshold %.2f)", enabled ? ">=" : "<", minSortedRatio);
+        queryContext.setSortedGroupByDecision(decision);
+        if (enabled) {
+          queryContext.setSortedGroupByMode(SortedGroupByMode.ON);
+        } else {
+          reason = decision;
+        }
+      } else {
+        queryContext.setSortedGroupByDecision(decision + ")");
+      }
     }
     if (reason != null) {
       LOGGER.debug("Not using the sorted streaming GROUP BY for {}={}: {}", QueryOptionKey.SORTED_GROUP_BY_MODE, mode,

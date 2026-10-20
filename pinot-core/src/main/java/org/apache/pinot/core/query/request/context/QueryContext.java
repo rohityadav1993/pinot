@@ -157,6 +157,10 @@ public class QueryContext implements QueryScopedCache {
   private SortedGroupByMode _sortedGroupByMode = Server.DEFAULT_SORTED_GROUP_BY_MODE;
   @Nullable
   private String _sortedGroupByFallbackReason;
+  /// How the plan maker resolved a requested sorted streaming GROUP BY, e.g. the sorted-segment ratio behind an AUTO
+  /// decision; surfaced in the combine's explain attributes.
+  @Nullable
+  private String _sortedGroupByDecision;
   private int _sortedGroupByBlockSize = Server.DEFAULT_SORTED_GROUP_BY_MERGE_BLOCK_SIZE;
   /// Minimum fraction of sorted segments for `AUTO` to resolve to `ON`
   private double _sortedSelectionMergeAutoMinSortedRatio =
@@ -648,6 +652,17 @@ public class QueryContext implements QueryScopedCache {
 
   public void setSortedGroupByFallbackReason(@Nullable String sortedGroupByFallbackReason) {
     _sortedGroupByFallbackReason = sortedGroupByFallbackReason;
+  }
+
+  /// Describes how a requested sorted streaming GROUP BY was resolved (segment counts, ratio), whether or not it was
+  /// engaged; `null` when never requested or when the query shape already ruled it out.
+  @Nullable
+  public String getSortedGroupByDecision() {
+    return _sortedGroupByDecision;
+  }
+
+  public void setSortedGroupByDecision(@Nullable String sortedGroupByDecision) {
+    _sortedGroupByDecision = sortedGroupByDecision;
   }
 
   public int getSortedGroupByBlockSize() {
