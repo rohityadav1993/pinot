@@ -23,120 +23,109 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
 import javax.annotation.Nullable;
 import org.apache.pinot.common.request.context.ExpressionContext;
 import org.apache.pinot.common.request.context.OrderByExpressionContext;
-import org.apache.pinot.common.utils.DataSchema;
 import org.apache.pinot.core.common.Operator;
-import org.apache.pinot.core.data.table.IntermediateRecord;
-import org.apache.pinot.core.data.table.Record;
-import org.apache.pinot.core.data.table.SortedRunsTable;
 import org.apache.pinot.core.operator.ExplainAttributeBuilder;
 import org.apache.pinot.core.operator.blocks.results.BaseResultsBlock;
+import org.apache.pinot.core.operator.blocks.results.ExceptionResultsBlock;
 import org.apache.pinot.core.operator.blocks.results.GroupByResultsBlock;
 import org.apache.pinot.core.operator.blocks.results.MetadataResultsBlock;
-import org.apache.pinot.core.operator.query.StreamingSortedGroupByOperator;
 import org.apache.pinot.core.operator.streaming.BaseStreamingCombineOperator;
-import org.apache.pinot.core.query.aggregation.function.AggregationFunction;
-import org.apache.pinot.core.query.aggregation.function.AggregationFunctionUtils;
 import org.apache.pinot.core.query.request.context.QueryContext;
 import org.apache.pinot.core.query.utils.OrderByComparatorFactory;
+import org.apache.pinot.spi.exception.EarlyTerminationException;
+import org.apache.pinot.spi.exception.QueryErrorCode;
 import org.apache.pinot.spi.query.QueryThreadContext;
 
 
 /// Streaming combine for the sorted streaming GROUP BY: a k-way merge, by group key, of the key-ordered streams that
-/// [StreamingSortedGroupByOperator] produces per segment, built on [SortedCursorMerge].
+/// the per-segment operators produce ([org.apache.pinot.core.operator.query.StreamingSortedGroupByOperator] for a
+/// segment sorted on the key, [org.apache.pinot.core.operator.query.HashSortedGroupByOperator] for any other), built on
+/// [SortedGroupByMerge] and [SortedCursorMerge].
 ///
-/// **Merge.** Cursors over all segments are activated up front. The loop polls the cursor with the smallest key,
-/// merges its row into the *open* group when the keys are equal (with [AggregationFunctionUtils#merge], which settles
-/// `null` intermediates), and otherwise closes the open group and opens a new one. Closed groups are batched into
-/// blocks of [QueryContext#getSortedGroupByBlockSize()] and returned from [#getNextBlock()]; the open group is
-/// never emitted early, because a later segment may still hold the same key. A key therefore appears at most once
-/// across all output blocks, and the output is ascending by key.
+/// **Merge groups.** The segment operators are split into merge groups by [SortedGroupByPartitioning]: one group per
+/// partition of the group-by column when every segment reports the same partition function and a single partition id
+/// (the same key can then never be in two groups), otherwise one group holding every segment. Each group is one
+/// [SortedGroupByMerge]. A key appears at most once across all output blocks, and the output is ascending by key
+/// *within* a group; with several groups the blocks of different groups interleave in arrival order, which no
+/// consumer may rely on.
 ///
-/// **Key.** The merge comparator is the standard ORDER BY comparator (ascending) over the group-by key prefix of the
-/// row, so a composite key needs no new code here; only the plan gate restricts engagement to one column today. Keys
-/// compare by value, never by dictionary id, because each segment has its own dictionary.
+/// **Threading.** A single group runs inline on the consumer thread in [#getNextBlock()], like
+/// [StreamingSelectionOrderByCombineOperator]. Several groups run as parallel tasks: [#start()] submits up to
+/// `numTasks` workers (the base class' task count) that each claim whole groups and push their blocks through the
+/// bounded blocking queue (back pressure) to the consumer, which only forwards them. The base class' `Phaser` fence is
+/// kept: workers register with it, and [#stop()] cancels them and waits for all of them before releasing any segment,
+/// so the segments the consumer thread references outlive every worker. A group's cursors are activated, advanced and
+/// released only by the one thread running that group. Per-segment hash aggregation results are materialized into
+/// self-contained records inside the per-segment operator, on the thread that ran it, so no worker-thread-local
+/// group-key state ever crosses a thread (see `StreamingGroupByCombineOperator#detachFromWorkerThreadState`).
+///
+/// **Null keys.** With null handling on, a null key sorts last and is an ordinary group of the merge. Partition
+/// metadata is stamped from the default value a null row holds, so every null row of a table sits in the partition of
+/// that default value, one group, and the groups stay disjoint.
 ///
 /// **Result kind.** When the leaf returns final results ([QueryContext#isServerReturnFinalResult()] or the key
 /// unpartitioned variant) each closed group's aggregation columns are converted with `extractFinalResult` and the
-/// block schema carries the final column types, exactly like `IndexedTable#finish(sort, true)`. Otherwise blocks carry
-/// intermediate results. Both are safe because a key is complete when emitted.
+/// block schema carries the final column types. Otherwise blocks carry intermediate results. Both are safe because a
+/// key is complete when emitted.
 ///
 /// **No limits.** There is no group-count limit and no trimming; memory is bounded by one block per active cursor plus
-/// the output batch.
+/// the output batch (and the queue, with several groups).
 ///
-/// **Threading.** Like [StreamingSelectionOrderByCombineOperator] this runs single-threaded on the consumer thread in
-/// [#getNextBlock()] and bypasses the base worker-queue model (and its `Phaser`); no async work may be introduced
-/// without restoring that fence. Single-use, not thread-safe.
+/// Single-use, not thread-safe: [#getNextBlock()], [#start()] and [#stop()] are called from the consumer thread.
 @SuppressWarnings({"rawtypes", "unchecked"})
 public class StreamingSortedGroupByCombineOperator extends BaseStreamingCombineOperator<GroupByResultsBlock> {
   public static final String EXPLAIN_NAME = "COMBINE_GROUP_BY_SORTED_STREAMING";
 
-  private static final SortedCursorMerge.BlockRows GROUP_BY_BLOCK_ROWS = new SortedCursorMerge.BlockRows() {
-    @Override
-    public DataSchema getDataSchema(BaseResultsBlock block) {
-      return ((GroupByResultsBlock) block).getDataSchema();
-    }
-
-    @Nullable
-    @Override
-    public List<Object[]> getRows(BaseResultsBlock block) {
-      List<IntermediateRecord> records = ((GroupByResultsBlock) block).getIntermediateRecords();
-      if (records == null) {
-        return null;
-      }
-      List<Object[]> rows = new ArrayList<>(records.size());
-      for (IntermediateRecord record : records) {
-        rows.add(record._record.getValues());
-      }
-      return rows;
-    }
-  };
-
-  private final AggregationFunction[] _aggregationFunctions;
-  private final int _numKeyColumns;
   private final boolean _returnFinalResult;
   private final int _blockSize;
-  private final Comparator<Object[]> _comparator;
-  private final SortedCursorMerge _merge;
-
-  // Merge progress (single-threaded; mutated only by the consumer thread driving getNextBlock())
-  private boolean _activated;
-  private long _numRowsMerged;
-  /// The group being accumulated; not yet in _outputRows because a later cursor may hold the same key
+  private final SortedGroupByPartitioning.Split _split;
+  private final List<SortedGroupByMerge> _merges;
+  private final boolean _parallel;
   @Nullable
-  private Object[] _openRow;
-  private List<Record> _outputRows = new ArrayList<>();
-  private DataSchema _outputSchema;
+  private final String _decision;
+
+  // Consumer-thread progress
+  private int _numMergesFinished;
   private boolean _done;
 
   public StreamingSortedGroupByCombineOperator(List<Operator> operators, QueryContext queryContext,
       ExecutorService executorService) {
-    // Null merger and unused executor, as in StreamingSelectionOrderByCombineOperator: the base consumption path is
-    // replaced and its entry points below fail loud.
+    // Null merger: the base consumption path is replaced and its entry points below fail loud.
     super(null, operators, queryContext, executorService);
     List<ExpressionContext> groupByExpressions = queryContext.getGroupByExpressions();
     assert groupByExpressions != null && !groupByExpressions.isEmpty();
-    _aggregationFunctions = queryContext.getAggregationFunctions();
-    assert _aggregationFunctions != null;
-    _numKeyColumns = groupByExpressions.size();
+    assert queryContext.getAggregationFunctions() != null;
     _returnFinalResult =
         queryContext.isServerReturnFinalResult() || queryContext.isServerReturnFinalResultKeyUnpartitioned();
     _blockSize = queryContext.getSortedGroupByBlockSize();
+    _decision = queryContext.getSortedGroupByDecision();
 
-    List<OrderByExpressionContext> keyOrder = new ArrayList<>(_numKeyColumns);
+    _split = SortedGroupByPartitioning.split(operators, groupByExpressions.get(0).getIdentifier(),
+        queryContext.getSchema());
+    _parallel = _split._groups.size() > 1;
+    Comparator<Object[]> comparator = getKeyComparator(queryContext);
+    _merges = new ArrayList<>(_split._groups.size());
+    for (List<Operator> group : _split._groups) {
+      _merges.add(new SortedGroupByMerge(group, queryContext, comparator,
+          EXPLAIN_NAME));
+    }
+  }
+
+  /// The merge comparator: the standard ORDER BY comparator (ascending, nulls last) over the group-by key prefix of a
+  /// row, so a composite key needs no new code here. Keys compare by value, never by dictionary id, because each
+  /// segment has its own dictionary.
+  public static Comparator<Object[]> getKeyComparator(QueryContext queryContext) {
+    List<ExpressionContext> groupByExpressions = queryContext.getGroupByExpressions();
+    assert groupByExpressions != null;
+    List<OrderByExpressionContext> keyOrder = new ArrayList<>(groupByExpressions.size());
     for (ExpressionContext groupByExpression : groupByExpressions) {
       keyOrder.add(new OrderByExpressionContext(groupByExpression, true, true));
     }
-    _comparator = OrderByComparatorFactory.getComparator(keyOrder, queryContext.isNullHandlingEnabled());
-
-    _merge = new SortedCursorMerge(_comparator, StreamingSortedGroupByCombineOperator::isStreamingOperator,
-        GROUP_BY_BLOCK_ROWS, _numOperators);
-    for (int i = 0; i < _numOperators; i++) {
-      // No key bounds: every cursor is activated, nothing is pruned
-      _merge.addCursor(_operators.get(i), null, null);
-    }
+    return OrderByComparatorFactory.getComparator(keyOrder, queryContext.isNullHandlingEnabled());
   }
 
   @Override
@@ -150,24 +139,72 @@ public class StreamingSortedGroupByCombineOperator extends BaseStreamingCombineO
     attributeBuilder.putLongIdempotent("blockSize", _blockSize);
     attributeBuilder.putBool("finalResult", _returnFinalResult);
     attributeBuilder.putLong("numSegments", _numOperators);
+    // Independent merge tasks: one per partition, or a single one holding every segment
+    attributeBuilder.putLong("numMergeGroups", _merges.size());
+    attributeBuilder.putBool("partitioned", _split.isPartitioned());
+    attributeBuilder.putBool("parallel", _parallel);
+    if (_split._partitionIds != null) {
+      List<String> groups = new ArrayList<>(_merges.size());
+      for (int i = 0; i < _split._groups.size(); i++) {
+        groups.add("partition " + _split._partitionIds.get(i) + ": " + _split._groups.get(i).size() + " segments");
+      }
+      attributeBuilder.putStringList("mergeGroups", groups);
+    } else if (_split._reason != null) {
+      attributeBuilder.putString("notPartitionedBecause", _split._reason);
+    }
+    if (_decision != null) {
+      attributeBuilder.putString("decision", _decision);
+    }
   }
 
-  /// No worker threads: the merge runs lazily in [#getNextBlock()].
+  /// Starts the parallel merge tasks, if there are several merge groups; a single group runs inline in
+  /// [#getNextBlock()].
   @Override
   public void start() {
+    if (_parallel) {
+      startProcess();
+    }
   }
 
-  /// Releases any segment still acquired (idempotent) so an early stop cannot leak acquires.
+  /// Stops the workers and waits for them (the `Phaser` fence), then releases any segment still acquired (idempotent)
+  /// so an early stop cannot leak acquires.
   @Override
   public void stop() {
     _done = true;
-    _merge.releaseAll();
+    stopProcess();
+    for (SortedGroupByMerge merge : _merges) {
+      merge.releaseAll();
+    }
   }
 
+  /// Worker body: claims whole merge groups and pushes their blocks to the consumer.
   @Override
   protected void processSegments() {
-    throw new IllegalStateException(
-        "StreamingSortedGroupByCombineOperator runs single-threaded; processSegments() must not be called");
+    int groupId;
+    while (_processingException.get() == null && (groupId = _nextOperatorId.getAndIncrement()) < _merges.size()) {
+      SortedGroupByMerge merge = _merges.get(groupId);
+      try {
+        GroupByResultsBlock block;
+        while ((block = merge.nextBlock()) != null) {
+          offerBlock(block);
+        }
+      } finally {
+        merge.releaseAll();
+      }
+      offerBlock(LAST_RESULTS_BLOCK);
+    }
+  }
+
+  // NOTE: Throws EarlyTerminationException when interrupted or timed out, like the base class' own hand-off
+  private void offerBlock(BaseResultsBlock block) {
+    try {
+      if (!_blockingQueue.offer(block, _queryContext.getEndTimeMs() - System.currentTimeMillis(),
+          TimeUnit.MILLISECONDS)) {
+        throw new EarlyTerminationException("Timed out waiting to add results block");
+      }
+    } catch (InterruptedException e) {
+      throw new EarlyTerminationException("Interrupted waiting to add results block");
+    }
   }
 
   @Override
@@ -182,120 +219,82 @@ public class StreamingSortedGroupByCombineOperator extends BaseStreamingCombineO
       return terminalBlock();
     }
     try {
-      long endTimeMs = _queryContext.getEndTimeMs();
-      // Once per block, unconditionally: the periodic check inside the loop only fires every few thousand rows, which
-      // a small block would never reach.
-      QueryThreadContext.checkTerminationAndSampleUsage(EXPLAIN_NAME, endTimeMs);
-      if (!_activated) {
-        for (SortedCursorMerge.Cursor cursor : _merge.getCursors()) {
-          QueryThreadContext.checkTerminationAndSampleUsage(EXPLAIN_NAME);
-          _merge.activate(cursor);
-        }
-        _activated = true;
+      BaseResultsBlock block = _parallel ? nextParallelBlock() : nextInlineBlock();
+      if (block != null) {
+        return block;
       }
-      while (true) {
-        // The loop may run through many rows without re-entering a child, so observe cancellation, pause and the
-        // deadline here.
-        QueryThreadContext.checkTerminationAndSampleUsagePeriodically((int) _numRowsMerged++, EXPLAIN_NAME, endTimeMs);
-        SortedCursorMerge.Cursor cursor = _merge.poll();
-        if (cursor == null) {
-          break;
-        }
-        Object[] row = cursor.currentHead();
-        if (_openRow != null && _comparator.compare(_openRow, row) == 0) {
-          mergeInto(_openRow, row);
-        } else {
-          if (_openRow != null) {
-            _outputRows.add(closeGroup(_openRow));
-          }
-          _openRow = row;
-        }
-        cursor.advance();
-        if (cursor.currentHead() != null) {
-          _merge.offer(cursor);
-        }
-        if (_outputRows.size() >= _blockSize) {
-          // Heap invariant holds: the advanced cursor is back in the heap.
-          return flushDataBlock();
-        }
-      }
-      // Every cursor is drained; the open group is complete.
       _done = true;
-      _merge.finish();
-      if (_openRow != null) {
-        _outputRows.add(closeGroup(_openRow));
-        _openRow = null;
-      }
-      if (!_outputRows.isEmpty()) {
-        return flushDataBlock();
-      }
       return terminalBlock();
     } catch (Exception e) {
       _done = true;
-      _merge.releaseAll();
+      releaseInlineMerge();
       return createExceptionResultsBlockAndAttachExecutionStats(e, "merging sorted group-by results");
     } catch (Throwable t) {
       // An Error must not leave segments acquired for the lifetime of the server.
       _done = true;
-      _merge.releaseAll();
+      releaseInlineMerge();
       throw t;
     }
   }
 
+  /// The single merge group runs on this thread. Returns `null` when it is complete.
+  @Nullable
+  private BaseResultsBlock nextInlineBlock() {
+    return _merges.get(0).nextBlock();
+  }
+
+  /// Forwards the next block a worker produced. Returns `null` when every group is complete.
+  @Nullable
+  private BaseResultsBlock nextParallelBlock()
+      throws InterruptedException {
+    long endTimeMs = _queryContext.getEndTimeMs();
+    while (_numMergesFinished < _merges.size()) {
+      QueryThreadContext.checkTermination(this::getExplainName);
+      BaseResultsBlock block = pollResultsBlock(_blockingQueue, endTimeMs);
+      if (block == null) {
+        throw QueryErrorCode.EXECUTION_TIMEOUT.asException("Timed out while polling results block");
+      }
+      if (block instanceof ExceptionResultsBlock) {
+        // A worker failed: its task already cleared the queue, so this is the last thing it will deliver
+        _done = true;
+        return checkTerminateExceptionAndAttachExecutionStats(block);
+      }
+      if (block == LAST_RESULTS_BLOCK) {
+        _numMergesFinished++;
+        continue;
+      }
+      return block;
+    }
+    return null;
+  }
+
+  /// Releases the segments of the inline merge. With parallel merges the workers own their groups' segments, so
+  /// nothing is released here: [#stop()], which the caller always runs, waits for the workers and then releases.
+  private void releaseInlineMerge() {
+    if (!_parallel) {
+      _merges.get(0).releaseAll();
+    }
+  }
+
   private BaseResultsBlock terminalBlock() {
-    return _merge.attachSchemaMismatchErrors(attachExecutionStats(new MetadataResultsBlock()));
-  }
-
-  /// Folds `row`'s aggregation intermediates into `openRow` (same key).
-  private void mergeInto(Object[] openRow, Object[] row) {
-    for (int i = 0; i < _aggregationFunctions.length; i++) {
-      int index = _numKeyColumns + i;
-      openRow[index] = AggregationFunctionUtils.merge(_aggregationFunctions[i], openRow[index], row[index]);
+    BaseResultsBlock block = attachExecutionStats(new MetadataResultsBlock());
+    for (SortedGroupByMerge merge : _merges) {
+      merge.attachSchemaMismatchErrors(block);
     }
-  }
-
-  /// Turns a finished group into an output record, extracting final results when the leaf returns them.
-  private Record closeGroup(Object[] row) {
-    if (_returnFinalResult) {
-      for (int i = 0; i < _aggregationFunctions.length; i++) {
-        int index = _numKeyColumns + i;
-        row[index] = _aggregationFunctions[i].extractFinalResult(row[index]);
-      }
-    }
-    return new Record(row);
-  }
-
-  private BaseResultsBlock flushDataBlock() {
-    List<Record> records = _outputRows;
-    _outputRows = new ArrayList<>();
-    return new GroupByResultsBlock(new SortedRunsTable(getOutputSchema(), records), _queryContext);
-  }
-
-  /// The output schema: the segments' intermediate schema, with the aggregation columns switched to their final types
-  /// when the leaf returns final results.
-  private DataSchema getOutputSchema() {
-    if (_outputSchema == null) {
-      // Rows only reach the output through a cursor, which captures the schema before accepting any.
-      DataSchema schema = _merge.getDataSchema();
-      assert schema != null;
-      if (_returnFinalResult) {
-        DataSchema.ColumnDataType[] columnDataTypes = schema.getColumnDataTypes().clone();
-        for (int i = 0; i < _aggregationFunctions.length; i++) {
-          columnDataTypes[_numKeyColumns + i] = _aggregationFunctions[i].getFinalResultColumnType();
-        }
-        schema = new DataSchema(schema.getColumnNames(), columnDataTypes);
-      }
-      _outputSchema = schema;
-    }
-    return _outputSchema;
+    return block;
   }
 
   @VisibleForTesting
   int getNumCursorsHoldingRows() {
-    return _merge.getNumCursorsHoldingRows();
+    int numCursors = 0;
+    for (SortedGroupByMerge merge : _merges) {
+      numCursors += merge.getNumCursorsHoldingRows();
+    }
+    return numCursors;
   }
 
-  private static boolean isStreamingOperator(Operator operator) {
-    return operator instanceof StreamingSortedGroupByOperator;
+  @VisibleForTesting
+  int getNumMergeGroups() {
+    return _merges.size();
   }
 }

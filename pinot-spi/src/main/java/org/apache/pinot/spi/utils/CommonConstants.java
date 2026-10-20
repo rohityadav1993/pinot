@@ -1751,7 +1751,9 @@ public class CommonConstants {
       /// Use the sorted streaming GROUP BY whenever the query and all segments qualify; otherwise fall back to the
       /// existing path.
       ON,
-      /// Reserved: decide from segment metadata. Not implemented yet; currently resolves to [#OFF].
+      /// Engage like [#ON], but only when at least the sorted-segment ratio
+      /// ([Broker.Request.QueryOptionKey#SORTED_SELECTION_MERGE_AUTO_MIN_SORTED_RATIO]) of the queried segments are
+      /// sorted on the group-by column, since only sorted segments avoid the hash aggregation; otherwise fall back.
       AUTO
     }
 

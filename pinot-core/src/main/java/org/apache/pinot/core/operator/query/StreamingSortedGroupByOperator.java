@@ -43,8 +43,10 @@ import org.apache.pinot.core.query.aggregation.function.AggregationFunctionUtils
 import org.apache.pinot.core.query.aggregation.function.AggregationFunctionUtils.AggregationInfo;
 import org.apache.pinot.core.query.aggregation.groupby.GroupByResultHolder;
 import org.apache.pinot.core.query.request.context.QueryContext;
+import org.apache.pinot.segment.spi.IndexSegment;
 import org.apache.pinot.segment.spi.index.reader.Dictionary;
 import org.apache.pinot.spi.query.QueryScanCostContext;
+import org.roaringbitmap.RoaringBitmap;
 
 
 /// Single-segment GROUP BY over a segment that is physically sorted on its one, dictionary-encoded, single-value
@@ -63,6 +65,12 @@ import org.apache.pinot.spi.query.QueryScanCostContext;
 /// consumer learns the schema. This block is not Table-backed: it is only meant for [#nextBlock()] consumers that read
 /// [GroupByResultsBlock#getIntermediateRecords()], such as the sorted streaming GROUP BY combine.
 ///
+/// **Null keys.** With null handling on, a row whose key is null (per the key's null bitmap) physically holds the
+/// column's default value, so it sits inside the run of that value and must not be aggregated with it. Such rows are
+/// split out of run detection, aggregated into one separate *null group* that accumulates across all blocks (merged
+/// with `AggregationFunctionUtils#merge`), and emitted last, after the final non-null group, which is where a null key
+/// sorts in the merge. A real key equal to the default value therefore stays a group of its own.
+///
 /// **No limits.** Unlike [GroupByOperator] this never creates a group-key generator, so `numGroupsLimit` and segment
 /// trimming do not apply: memory is bounded by the largest block, not by the group count. The planner only builds it
 /// when the query cannot trim at the leaf (see
@@ -74,6 +82,7 @@ public class StreamingSortedGroupByOperator extends BaseOperator<GroupByResultsB
   public static final String EXPLAIN_NAME = "GROUP_BY_SORTED_STREAMING";
 
   private final QueryContext _queryContext;
+  private final IndexSegment _indexSegment;
   private final AggregationFunction[] _aggregationFunctions;
   private final ExpressionContext _groupByExpression;
   private final BaseProjectOperator<?> _projectOperator;
@@ -88,16 +97,20 @@ public class StreamingSortedGroupByOperator extends BaseOperator<GroupByResultsB
   private int _openDictId;
   @Nullable
   private Object[] _openValues;
+  // The null-key group, accumulated across blocks and emitted last; null until a null-key row is seen
+  @Nullable
+  private Object[] _nullValues;
 
   private boolean _inputExhausted;
   private boolean _emittedBlock;
   private int _numDocsScanned = 0;
 
   public StreamingSortedGroupByOperator(QueryContext queryContext, AggregationInfo aggregationInfo,
-      long numTotalDocs) {
+      IndexSegment indexSegment, long numTotalDocs) {
     assert queryContext.getAggregationFunctions() != null && queryContext.getGroupByExpressions() != null
         && queryContext.getGroupByExpressions().size() == 1;
     _queryContext = queryContext;
+    _indexSegment = indexSegment;
     _aggregationFunctions = queryContext.getAggregationFunctions();
     _groupByExpression = queryContext.getGroupByExpressions().get(0);
     _projectOperator = aggregationInfo.getProjectOperator();
@@ -129,9 +142,15 @@ public class StreamingSortedGroupByOperator extends BaseOperator<GroupByResultsB
       }
       processBlock(valueBlock, finished);
     }
-    if (_inputExhausted && _openValues != null) {
-      finished.add(toRecord(_openValues));
-      _openValues = null;
+    if (_inputExhausted) {
+      if (_openValues != null) {
+        finished.add(toRecord(_openValues));
+        _openValues = null;
+      }
+      if (_nullValues != null) {
+        finished.add(toRecord(_nullValues));
+        _nullValues = null;
+      }
     }
     if (finished.isEmpty() && _emittedBlock) {
       return null;
@@ -163,28 +182,60 @@ public class StreamingSortedGroupByOperator extends BaseOperator<GroupByResultsB
     }
     int[] runIds = _runIds;
     int[] runDictIds = _runDictIds;
+    // Null-key rows (null handling on) are excluded from run detection and tagged -1, then given the group id one past
+    // the last run
+    RoaringBitmap nullBitmap = _queryContext.isNullHandlingEnabled() ? keyValSet.getNullBitmap() : null;
+    boolean hasNullKeys = nullBitmap != null && !nullBitmap.isEmpty();
     int numRuns = 0;
     int previousDictId = -1;
     for (int i = 0; i < numDocs; i++) {
+      if (hasNullKeys && nullBitmap.contains(i)) {
+        runIds[i] = -1;
+        continue;
+      }
       int dictId = dictIds[i];
-      if (i == 0 || dictId != previousDictId) {
+      if (dictId != previousDictId) {
         runDictIds[numRuns++] = dictId;
         previousDictId = dictId;
       }
       runIds[i] = numRuns - 1;
     }
+    int nullGroupId = numRuns;
+    int numGroups = numRuns;
+    if (hasNullKeys) {
+      for (int i = 0; i < numDocs; i++) {
+        if (runIds[i] == -1) {
+          runIds[i] = nullGroupId;
+        }
+      }
+      numGroups++;
+    }
 
-    // Aggregate every run of this block at once, one holder per function, group id = run index in the block
+    // Aggregate every group of this block at once, one holder per function, group id = run index in the block
     int numAggregationFunctions = _aggregationFunctions.length;
     GroupByResultHolder[] holders = new GroupByResultHolder[numAggregationFunctions];
     for (int i = 0; i < numAggregationFunctions; i++) {
       AggregationFunction function = _aggregationFunctions[i];
-      GroupByResultHolder holder = function.createGroupByResultHolder(numRuns, numRuns);
-      holder.ensureCapacity(numRuns);
+      GroupByResultHolder holder = function.createGroupByResultHolder(numGroups, numGroups);
+      holder.ensureCapacity(numGroups);
       Map<ExpressionContext, BlockValSet> blockValSetMap =
           AggregationFunctionUtils.getBlockValSetMap(function, valueBlock);
       function.aggregateGroupBySV(numDocs, runIds, holder, blockValSetMap);
       holders[i] = holder;
+    }
+
+    if (hasNullKeys) {
+      if (_nullValues == null) {
+        _nullValues = new Object[1 + numAggregationFunctions];
+        for (int i = 0; i < numAggregationFunctions; i++) {
+          _nullValues[1 + i] = _aggregationFunctions[i].extractGroupByResult(holders[i], nullGroupId);
+        }
+      } else {
+        for (int i = 0; i < numAggregationFunctions; i++) {
+          _nullValues[1 + i] = AggregationFunctionUtils.merge(_aggregationFunctions[i], _nullValues[1 + i],
+              _aggregationFunctions[i].extractGroupByResult(holders[i], nullGroupId));
+        }
+      }
     }
 
     for (int run = 0; run < numRuns; run++) {
@@ -211,6 +262,12 @@ public class StreamingSortedGroupByOperator extends BaseOperator<GroupByResultsB
 
   private static IntermediateRecord toRecord(Object[] values) {
     return IntermediateRecord.withoutOrderByValues(new Key(new Object[]{values[0]}), new Record(values));
+  }
+
+  /// The segment this operator reads, so the combine can read its partition metadata without acquiring it.
+  @Override
+  public IndexSegment getIndexSegment() {
+    return _indexSegment;
   }
 
   @Override
