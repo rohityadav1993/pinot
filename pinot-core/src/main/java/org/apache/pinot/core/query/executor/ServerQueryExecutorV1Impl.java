@@ -66,6 +66,7 @@ import org.apache.pinot.core.query.pruner.SegmentPrunerStatistics;
 import org.apache.pinot.core.query.request.ServerQueryRequest;
 import org.apache.pinot.core.query.request.context.ExplainMode;
 import org.apache.pinot.core.query.request.context.QueryContext;
+import org.apache.pinot.core.query.request.context.SortedGroupByDecision;
 import org.apache.pinot.core.query.request.context.TimerContext;
 import org.apache.pinot.core.query.request.context.utils.QueryContextConverterUtils;
 import org.apache.pinot.core.query.utils.idset.IdSet;
@@ -400,13 +401,11 @@ public class ServerQueryExecutorV1Impl implements QueryExecutor {
   }
 
   /// Reports whether the sorted streaming GROUP BY engaged, or why it did not when it was requested. The plan maker
-  /// resolves the mode on the query context before the plan is built, so this is read after execution.
+  /// decides on the query context before the plan is built, so this is read after execution.
   private static void addSortedGroupByStats(InstanceResponseBlock instanceResponse, QueryContext queryContext) {
-    if (queryContext.isSortedGroupByEnabled()) {
-      instanceResponse.addMetadata(MetadataKey.SORTED_GROUP_BY_ENGAGED.getName(), "true");
-    } else if (queryContext.getSortedGroupByFallbackReason() != null) {
-      instanceResponse.addMetadata(MetadataKey.SORTED_GROUP_BY_FALLBACK_REASON.getName(),
-          queryContext.getSortedGroupByFallbackReason());
+    SortedGroupByDecision decision = queryContext.getSortedGroupByDecision();
+    if (decision != null) {
+      decision.toMetadata().forEach(instanceResponse::addMetadata);
     }
   }
 

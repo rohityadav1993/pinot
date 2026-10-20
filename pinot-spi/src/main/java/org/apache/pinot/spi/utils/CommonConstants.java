@@ -1811,8 +1811,6 @@ public class CommonConstants {
 
     public static final SortedGroupByMode DEFAULT_SORTED_GROUP_BY_MODE = SortedGroupByMode.OFF;
 
-    /// Maximum number of finished groups per block emitted by the sorted streaming GROUP BY combine.
-    public static final int DEFAULT_SORTED_GROUP_BY_MERGE_BLOCK_SIZE = 10_000;
     /// Server-wide override of [#DEFAULT_SORTED_SELECTION_MERGE_AUTO_MIN_SORTED_RATIO], applied to queries that do not
     /// set the query option.
     public static final String SORTED_SELECTION_MERGE_AUTO_MIN_SORTED_RATIO =
