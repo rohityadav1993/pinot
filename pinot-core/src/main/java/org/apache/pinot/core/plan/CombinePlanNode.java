@@ -35,6 +35,7 @@ import org.apache.pinot.core.operator.combine.SelectionOrderByCombineOperator;
 import org.apache.pinot.core.operator.combine.SequentialSortedGroupByCombineOperator;
 import org.apache.pinot.core.operator.combine.SortedGroupByCombineOperator;
 import org.apache.pinot.core.operator.combine.StreamingSelectionOrderByCombineOperator;
+import org.apache.pinot.core.operator.combine.StreamingSortedGroupByCombineOperator;
 import org.apache.pinot.core.operator.streaming.StreamingDistinctCombineOperator;
 import org.apache.pinot.core.operator.streaming.StreamingGroupByCombineOperator;
 import org.apache.pinot.core.operator.streaming.StreamingSelectionOnlyCombineOperator;
@@ -142,6 +143,14 @@ public class CombinePlanNode implements PlanNode {
       if (_queryContext.isSortedSelectionMergeEnabled() && QueryContextUtils.isSelectionQuery(_queryContext)
           && _queryContext.getLimit() != 0 && _queryContext.getOrderByExpressions() != null) {
         return new StreamingSelectionOrderByCombineOperator(operators, _queryContext, _executorService);
+      }
+      // Sorted streaming GROUP BY (opt-in via sortedGroupByMode). The plan maker has already decided from metadata
+      // whether the query and every segment qualify, and the segment plan nodes built the matching streaming
+      // operators, so this only follows that decision. Unlike the flush combine below it supports leaves that return
+      // final results: a key is complete when this combine emits it.
+      if (_queryContext.isSortedGroupByEnabled() && QueryContextUtils.isAggregationQuery(_queryContext)
+          && _queryContext.getGroupByExpressions() != null) {
+        return new StreamingSortedGroupByCombineOperator(operators, _queryContext, _executorService);
       }
       // Streaming flushes partial results, so it needs an aggregation above to merge them back together.
       // Leaves that must return final results are excluded, see StreamingGroupByCombineOperator.
