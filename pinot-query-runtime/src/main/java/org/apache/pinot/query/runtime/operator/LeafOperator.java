@@ -465,6 +465,12 @@ public class LeafOperator extends MultiStageOperator implements ExplainableOpera
           break;
         case SORTED:
           break;
+        case SORTED_GROUP_BY_ENGAGED:
+          _statMap.merge(StatKey.SORTED_GROUP_BY_ENGAGED, Boolean.parseBoolean(entry.getValue()));
+          break;
+        case SORTED_GROUP_BY_FALLBACK_REASON:
+          _statMap.merge(StatKey.SORTED_GROUP_BY_FALLBACK_REASONS, Set.of(entry.getValue()));
+          break;
         default:
           throw new IllegalArgumentException("Unhandled leaf execution stat: " + key);
       }
@@ -818,7 +824,13 @@ public class LeafOperator extends MultiStageOperator implements ExplainableOpera
     /// Number of remote accesses made directly, i.e. outside the buffers fetched for the query.
     NUM_DIRECT_REMOTE_ACCESSES(StatMap.Type.LONG),
     /// Number of bytes read by the direct remote accesses.
-    DIRECT_REMOTE_ACCESS_BYTES(StatMap.Type.LONG);
+    DIRECT_REMOTE_ACCESS_BYTES(StatMap.Type.LONG),
+    /// Whether the sorted streaming GROUP BY engaged on at least one worker of this leaf stage. Absent when the
+    /// `sortedGroupByMode` query option was not set or it did not engage.
+    SORTED_GROUP_BY_ENGAGED(StatMap.Type.BOOLEAN, null),
+    /// Why the requested sorted streaming GROUP BY did not engage, per worker. Absent when it engaged or was not
+    /// requested.
+    SORTED_GROUP_BY_FALLBACK_REASONS(StatMap.Type.STRING_SET, null);
     // IMPORTANT: When adding new StatKeys, make sure to either create the same key in BrokerResponseNativeV2.StatKey or
     //  call the constructor that accepts a String as last argument and set it to null.
     //  Otherwise the constructor will fail with an IllegalArgumentException which will not be caught and will

@@ -1000,10 +1000,44 @@ public class CommonConstants {
         public static final String SORTED_SELECTION_MERGE_BLOCK_SIZE = "sortedSelectionMergeBlockSize";
 
         /// Selects the sorted streaming GROUP BY: a per-segment operator that aggregates runs of equal keys over a
-        /// segment sorted on the single group-by column, and a combine that merges those per-segment key-ordered
-        /// streams by key. One of [Server.SortedGroupByMode] (case-insensitive); defaults to
-        /// [Server#DEFAULT_SORTED_GROUP_BY_MODE]. Engages only on the streaming instance plan (the path the MSE leaf
-        /// uses); the non-streaming plan ignores it.
+        /// segment sorted on the group-by column, and a combine that merges those per-segment key-ordered streams by
+        /// key. One of [Server.SortedGroupByMode] (case-insensitive); defaults to
+        /// [Server#DEFAULT_SORTED_GROUP_BY_MODE].
+        ///
+        /// **Modes.** `OFF` never uses it, `ON` uses it whenever the query and every queried segment qualify and
+        /// otherwise runs the existing hash GROUP BY with identical results, `AUTO` is reserved (see
+        /// [Server.SortedGroupByMode]). An unknown value fails the query.
+        ///
+        /// **When it engages.** Only on the streaming instance plan, which is what a multi-stage engine leaf stage
+        /// uses; the single-stage engine ignores the option. The query must `GROUP BY` exactly one plain column with
+        /// no `ORDER BY`, `HAVING`, grouping sets or filtered aggregations, and a `LIMIT` of at least the groups
+        /// limit (a multi-stage leaf has none unless the planner pushed one down). Every queried segment must be
+        /// immutable, sorted on that column, single-value and dictionary-encoded, and, with null handling on, flagged
+        /// as holding no nulls. One segment that does not qualify turns the whole request off for that server
+        /// request. The leaf stage reports the outcome in its stats: `sortedGroupByEngaged`, or
+        /// `sortedGroupByFallbackReasons` with the reason it did not engage.
+        ///
+        /// **Canonical funnel query.** The ordered funnel is a two-level query whose inner `GROUP BY` is the sorted
+        /// key:
+        ///
+        /// ```sql
+        /// SELECT bucket, SUM(CASE WHEN max_step >= 1 THEN 1 ELSE 0 END) AS step1_users, ... FROM (
+        ///   SELECT arrayElementAtLong(r, 1) AS max_step, arrayElementAtLong(r, 2) AS entry_ts FROM (
+        ///     SELECT correlation_id,
+        ///            FUNNEL_MAX_STEP_WITH_ENTRY(ts, W, 3, s1, s2, s3, 'STRICT_ORDER') AS r
+        ///     FROM events WHERE ts BETWEEN lo AND hi + W GROUP BY correlation_id))
+        /// WHERE max_step >= 1 AND entry_ts BETWEEN lo AND hi GROUP BY 1
+        /// ```
+        ///
+        /// **Plan shapes.** By default the leaf returns intermediate results and an exchange on the key follows
+        /// (plan shape (a)); it is correct on any layout. With the hint `aggOptions(is_partitioned_by_group_by_keys=
+        /// 'true')` the leaf is the final aggregate and no exchange follows (plan shape (b)). **Hazard:** (b) trusts
+        /// that all rows of a key are on one server. On a layout where partitions are not exclusive to one server it
+        /// silently returns wrong results (a key once per server, with a partial funnel each); nothing validates it.
+        ///
+        /// **Not `FUNNEL_COUNT`.** Ordered funnel counts differ from SSE `FUNNEL_COUNT` by design: step k counts
+        /// users who did steps 1..k in order within the window, each user once in their entry bucket, so the numbers
+        /// are at most the unordered ones and will not match existing `FUNNEL_COUNT` dashboards.
         public static final String SORTED_GROUP_BY_MODE = "sortedGroupByMode";
 
         public static final String NUM_REPLICA_GROUPS_TO_QUERY = "numReplicaGroupsToQuery";
@@ -1745,6 +1779,8 @@ public class CommonConstants {
     ///
     /// The mode is a request, not a guarantee: the plan maker engages the sorted streaming path only when the query
     /// shape and every queried segment qualify, and otherwise keeps the existing GROUP BY path with identical results.
+    /// See the option's documentation for when it engages, the canonical funnel query and the hazard of plan shape
+    /// (b).
     public enum SortedGroupByMode {
       /// Never use the sorted streaming GROUP BY.
       OFF,
