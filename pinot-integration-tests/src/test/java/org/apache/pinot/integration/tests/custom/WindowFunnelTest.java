@@ -279,6 +279,86 @@ public class WindowFunnelTest extends CustomDataQueryClusterIntegrationTest {
   }
 
   @Test(dataProvider = "useBothQueryEngines")
+  public void testFunnelMaxStepWithEntryGroupByQueries(boolean useMultiStageQueryEngine)
+      throws Exception {
+    setUseMultiStageQueryEngine(useMultiStageQueryEngine);
+    // Per user group: {deepest step, entry timestamp}; the deepest step must equal funnelMaxStep
+    long[][] expected = {{4, 1000}, {3, 2000}, {3, 1000}, {1, 12050}};
+    String steps = "'1000', 4, url = '/product/search', url = '/cart/add', url = '/checkout/start', "
+        + "url = '/checkout/confirmation'";
+    String query = String.format("SELECT userId, funnelMaxStepWithEntry(timestampCol, %s), "
+        + "funnelMaxStep(timestampCol, %s) FROM %s GROUP BY userId ORDER BY userId LIMIT %d", steps, steps,
+        getTableName(), getCountStarResult());
+    JsonNode rows = postQuery(query).get("resultTable").get("rows");
+    assertEquals(rows.size(), 40);
+    for (int i = 0; i < 40; i++) {
+      JsonNode row = rows.get(i);
+      assertEquals(row.get(0).textValue(), "user" + (i / 10) + (i % 10));
+      assertEquals(row.get(1).get(0).longValue(), expected[i / 10][0]);
+      assertEquals(row.get(1).get(1).longValue(), expected[i / 10][1]);
+      assertEquals(row.get(1).get(0).longValue(), row.get(2).longValue());
+    }
+
+    // Readable with arrayElementAtLong (1-based)
+    query = String.format("SELECT userId, arrayElementAtLong(funnelMaxStepWithEntry(timestampCol, %s), 1), "
+        + "arrayElementAtLong(funnelMaxStepWithEntry(timestampCol, %s), 2) FROM %s GROUP BY userId "
+        + "ORDER BY userId LIMIT %d", steps, steps, getTableName(), getCountStarResult());
+    rows = postQuery(query).get("resultTable").get("rows");
+    assertEquals(rows.size(), 40);
+    for (int i = 0; i < 40; i++) {
+      assertEquals(rows.get(i).get(1).longValue(), expected[i / 10][0]);
+      assertEquals(rows.get(i).get(2).longValue(), expected[i / 10][1]);
+    }
+  }
+
+  @Test(dataProvider = "useBothQueryEngines")
+  public void testFunnelMaxStepWithEntryNoGroupByAndNoStepOne(boolean useMultiStageQueryEngine)
+      throws Exception {
+    setUseMultiStageQueryEngine(useMultiStageQueryEngine);
+    // Across all users the deepest chain is user x0..x9 of group 0, whose earliest window starts at 1000
+    String query = String.format("SELECT funnelMaxStepWithEntry(timestampCol, '1000', 4, url = '/product/search', "
+        + "url = '/cart/add', url = '/checkout/start', url = '/checkout/confirmation') FROM %s LIMIT %d",
+        getTableName(), getCountStarResult());
+    JsonNode row = postQuery(query).get("resultTable").get("rows").get(0);
+    assertEquals(row.get(0).get(0).longValue(), 4);
+    assertEquals(row.get(0).get(1).longValue(), 1000);
+
+    // No step 1 anywhere: deepest step 0 and the placeholder entry
+    query = String.format("SELECT userId, funnelMaxStepWithEntry(timestampCol, '1000', 2, url = '/nope', "
+        + "url = '/cart/add') FROM %s GROUP BY userId ORDER BY userId LIMIT %d", getTableName(),
+        getCountStarResult());
+    JsonNode rows = postQuery(query).get("resultTable").get("rows");
+    assertEquals(rows.size(), 40);
+    for (JsonNode r : rows) {
+      assertEquals(r.get(1).get(0).longValue(), 0);
+      assertEquals(r.get(1).get(1).longValue(), Long.MIN_VALUE);
+    }
+  }
+
+  @Test(dataProvider = "useBothQueryEngines")
+  public void testFunnelMaxStepWithEntryWithModeAndMaxStepDuration(boolean useMultiStageQueryEngine)
+      throws Exception {
+    setUseMultiStageQueryEngine(useMultiStageQueryEngine);
+    String args = "'1000', 3, url = '/product/search', url = '/checkout/start', url = '/checkout/confirmation', "
+        + "'mode=strict_order', 'maxStepDuration=10'";
+    String query = String.format("SELECT userId, funnelMaxStepWithEntry(timestampCol, %s), "
+        + "funnelMaxStep(timestampCol, %s) FROM %s GROUP BY userId ORDER BY userId LIMIT %d", args, args,
+        getTableName(), getCountStarResult());
+    JsonNode rows = postQuery(query).get("resultTable").get("rows");
+    assertEquals(rows.size(), 40);
+    for (JsonNode row : rows) {
+      long step = row.get(1).get(0).longValue();
+      assertEquals(step, row.get(2).longValue());
+      // Every user has a step 1 event here, so there is always an entry, and it is a real timestamp
+      if (step == 0) {
+        assertEquals(row.get(1).get(1).longValue(), Long.MIN_VALUE);
+      } else {
+        assertTrue(row.get(1).get(1).longValue() > 0);
+      }
+    }
+  }
+
+  @Test(dataProvider = "useBothQueryEngines")
   public void testFunnelMaxStepGroupByQueriesWithMaxStepDuration(boolean useMultiStageQueryEngine)
       throws Exception {
     setUseMultiStageQueryEngine(useMultiStageQueryEngine);
