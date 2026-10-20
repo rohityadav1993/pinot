@@ -1004,18 +1004,34 @@ public class CommonConstants {
         /// key. One of [Server.SortedGroupByMode] (case-insensitive); defaults to
         /// [Server#DEFAULT_SORTED_GROUP_BY_MODE].
         ///
-        /// **Modes.** `OFF` never uses it, `ON` uses it whenever the query and every queried segment qualify and
-        /// otherwise runs the existing hash GROUP BY with identical results, `AUTO` is reserved (see
-        /// [Server.SortedGroupByMode]). An unknown value fails the query.
+        /// **Modes.** `OFF` never uses it. `ON` uses it whenever the query shape qualifies, and otherwise runs the
+        /// existing hash GROUP BY with identical results. `AUTO` is `ON` only when at least the sorted-segment ratio
+        /// of the queried segments is sorted on the group-by column (default 0.8, option
+        /// [#SORTED_SELECTION_MERGE_AUTO_MIN_SORTED_RATIO]), since only sorted segments avoid the hash aggregation;
+        /// below it, `AUTO` falls back to the existing path. An unknown value fails the query.
         ///
         /// **When it engages.** Only on the streaming instance plan, which is what a multi-stage engine leaf stage
         /// uses; the single-stage engine ignores the option. The query must `GROUP BY` exactly one plain column with
         /// no `ORDER BY`, `HAVING`, grouping sets or filtered aggregations, and a `LIMIT` of at least the groups
-        /// limit (a multi-stage leaf has none unless the planner pushed one down). Every queried segment must be
-        /// immutable, sorted on that column, single-value and dictionary-encoded, and, with null handling on, flagged
-        /// as holding no nulls. One segment that does not qualify turns the whole request off for that server
-        /// request. The leaf stage reports the outcome in its stats: `sortedGroupByEngaged`, or
-        /// `sortedGroupByFallbackReasons` with the reason it did not engage.
+        /// limit (a multi-stage leaf has none unless the planner pushed one down). No segment disqualifies the
+        /// request: an immutable segment that is sorted on the column, single-value and dictionary-encoded is read in
+        /// document order; every other segment (unsorted, consuming, raw-encoded) runs the existing per-segment hash
+        /// aggregation, sorts its groups by key and joins the same merge. The groups limit still applies to those
+        /// hash-aggregated segments, but not to the sorted ones.
+        ///
+        /// **Null keys.** With null handling on, rows with a null key form one group of their own, merged across
+        /// segments and emitted last, so a real key equal to the column's default value is never merged with nulls.
+        /// With null handling off, a null row is an ordinary row holding the default value, as in the hash GROUP BY.
+        ///
+        /// **Parallelism.** When every queried segment reports, for the group-by column, the same partition function
+        /// and exactly one partition, the server merges each partition as an independent parallel task (a key never
+        /// spans partitions). Otherwise all segments form one merge on the request thread. Output is ordered by key
+        /// within a merge only; with several partition tasks the blocks of different partitions interleave.
+        ///
+        /// **Checking the outcome.** The leaf stage reports `sortedGroupByEngaged`, or `sortedGroupByFallbackReasons`
+        /// with the reason it did not engage (for `AUTO` below the ratio, the segment counts and the ratio). The
+        /// combine's explain attributes show `numMergeGroups`, `partitioned`, `parallel`, `mergeGroups` and the
+        /// `decision` (segment counts behind an `ON` or `AUTO` resolution).
         ///
         /// **Canonical funnel query.** The ordered funnel is a two-level query whose inner `GROUP BY` is the sorted
         /// key:
@@ -1778,14 +1794,14 @@ public class CommonConstants {
     /// Selects the sorted streaming GROUP BY ([Broker.Request.QueryOptionKey#SORTED_GROUP_BY_MODE]).
     ///
     /// The mode is a request, not a guarantee: the plan maker engages the sorted streaming path only when the query
-    /// shape and every queried segment qualify, and otherwise keeps the existing GROUP BY path with identical results.
-    /// See the option's documentation for when it engages, the canonical funnel query and the hazard of plan shape
-    /// (b).
+    /// shape qualifies (and, for `AUTO`, enough segments are sorted), and otherwise keeps the existing GROUP BY path
+    /// with identical results. See the option's documentation for when it engages, how unsorted, consuming and
+    /// null-key data and partitions are handled, the canonical funnel query and the hazard of plan shape (b).
     public enum SortedGroupByMode {
       /// Never use the sorted streaming GROUP BY.
       OFF,
-      /// Use the sorted streaming GROUP BY whenever the query and all segments qualify; otherwise fall back to the
-      /// existing path.
+      /// Use the sorted streaming GROUP BY whenever the query shape qualifies; otherwise fall back to the existing
+      /// path. Segments that are not sorted on the key hash-aggregate and sort their groups.
       ON,
       /// Engage like [#ON], but only when at least the sorted-segment ratio
       /// ([Broker.Request.QueryOptionKey#SORTED_SELECTION_MERGE_AUTO_MIN_SORTED_RATIO]) of the queried segments are
