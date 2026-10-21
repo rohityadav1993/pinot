@@ -40,6 +40,7 @@ import org.apache.pinot.spi.utils.CommonConstants.Broker.Request.QueryOptionKey;
 import org.apache.pinot.spi.utils.CommonConstants.MultiStageQueryRunner.JoinOverFlowMode;
 import org.apache.pinot.spi.utils.CommonConstants.MultiStageQueryRunner.WindowOverFlowMode;
 import org.apache.pinot.spi.utils.CommonConstants.Server.AndRestrictionPushdownMode;
+import org.apache.pinot.spi.utils.CommonConstants.Server.SortedGroupByMode;
 import org.apache.pinot.spi.utils.CommonConstants.Server.SortedSelectionMergeMode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -662,6 +663,22 @@ public class QueryOptionsUtils {
       throw new IllegalArgumentException(
           String.format("%s must be one of %s, got: %s", QueryOptionKey.SORTED_SELECTION_MERGE_MODE,
               Arrays.toString(SortedSelectionMergeMode.values()), value));
+    }
+  }
+
+  /// Returns the sorted streaming GROUP BY mode, or null if not set. Accepts the enum constant names in any case.
+  @Nullable
+  public static SortedGroupByMode getSortedGroupByMode(Map<String, String> queryOptions) {
+    String value = queryOptions.get(QueryOptionKey.SORTED_GROUP_BY_MODE);
+    if (value == null) {
+      return null;
+    }
+    try {
+      return SortedGroupByMode.valueOf(value.trim().toUpperCase());
+    } catch (IllegalArgumentException e) {
+      throw new IllegalArgumentException(
+          String.format("%s must be one of %s, got: %s", QueryOptionKey.SORTED_GROUP_BY_MODE,
+              Arrays.toString(SortedGroupByMode.values()), value));
     }
   }
 

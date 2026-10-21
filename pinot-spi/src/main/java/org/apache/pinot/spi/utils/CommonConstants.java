@@ -999,6 +999,66 @@ public class CommonConstants {
         /// Output block size (rows) for the streaming selection ORDER BY combine.
         public static final String SORTED_SELECTION_MERGE_BLOCK_SIZE = "sortedSelectionMergeBlockSize";
 
+        /// Selects the sorted streaming GROUP BY: a per-segment operator that aggregates runs of equal keys over a
+        /// segment sorted on the group-by column, and a combine that merges those per-segment key-ordered streams by
+        /// key. One of [Server.SortedGroupByMode] (case-insensitive); defaults to
+        /// [Server#DEFAULT_SORTED_GROUP_BY_MODE].
+        ///
+        /// **Modes.** `OFF` never uses it. `ON` uses it whenever the query shape qualifies, and otherwise runs the
+        /// existing hash GROUP BY with identical results. `AUTO` is `ON` only when at least the sorted-segment ratio
+        /// of the queried segments is sorted on the group-by column, since only sorted segments avoid the hash
+        /// aggregation; below it, `AUTO` falls back to the existing path. The threshold is not a separate setting: it
+        /// reuses the streaming selection ORDER BY's [#SORTED_SELECTION_MERGE_AUTO_MIN_SORTED_RATIO] option (and its
+        /// default, 0.8), so changing that option changes both features. An unknown value fails the query.
+        ///
+        /// **When it engages.** Only on the streaming instance plan, which is what a multi-stage engine leaf stage
+        /// uses; the single-stage engine ignores the option. The query must `GROUP BY` exactly one plain column with
+        /// no `ORDER BY`, `HAVING`, grouping sets or filtered aggregations, and a `LIMIT` of at least the groups
+        /// limit (a multi-stage leaf has none unless the planner pushed one down). No segment disqualifies the
+        /// request: an immutable segment that is sorted on the column, single-value and dictionary-encoded is read in
+        /// document order; every other segment (unsorted, consuming, raw-encoded) runs the existing per-segment hash
+        /// aggregation, sorts its groups by key and joins the same merge. The per-segment groups limit still applies
+        /// to those hash-aggregated segments (a segment with more groups than the limit drops the excess, exactly as
+        /// on the existing path, and the numGroupsLimitReached flag it raises is carried on the output), but not to the
+        /// sorted segments, which never build a group-key map and so are never limited.
+        ///
+        /// **Null keys.** With null handling on, rows with a null key form one group of their own, merged across
+        /// segments and emitted last, so a real key equal to the column's default value is never merged with nulls.
+        /// With null handling off, a null row is an ordinary row holding the default value, as in the hash GROUP BY.
+        ///
+        /// **Parallelism.** When every queried segment reports, for the group-by column, the same partition function
+        /// and exactly one partition, the server merges each partition as an independent parallel task (a key never
+        /// spans partitions). Otherwise all segments form one merge on the request thread. Output is ordered by key
+        /// within a merge only; with several partition tasks the blocks of different partitions interleave.
+        ///
+        /// **Checking the outcome.** The leaf stage reports `sortedGroupByEngaged`, or `sortedGroupByFallbackReasons`
+        /// with the reason it did not engage (for `AUTO` below the ratio, the segment counts and the ratio). The
+        /// combine's explain attributes show `numMergeGroups`, `partitioned`, `parallel`, `mergeGroups` and the
+        /// `decision` (segment counts behind an `ON` or `AUTO` resolution).
+        ///
+        /// **Canonical funnel query.** The ordered funnel is a two-level query whose inner `GROUP BY` is the sorted
+        /// key:
+        ///
+        /// ```sql
+        /// SELECT bucket, SUM(CASE WHEN max_step >= 1 THEN 1 ELSE 0 END) AS step1_users, ... FROM (
+        ///   SELECT arrayElementAtLong(r, 1) AS max_step, arrayElementAtLong(r, 2) AS entry_ts FROM (
+        ///     SELECT correlation_id,
+        ///            FUNNEL_MAX_STEP_WITH_ENTRY(ts, W, 3, s1, s2, s3, 'STRICT_ORDER') AS r
+        ///     FROM events WHERE ts BETWEEN lo AND hi + W GROUP BY correlation_id))
+        /// WHERE max_step >= 1 AND entry_ts BETWEEN lo AND hi GROUP BY 1
+        /// ```
+        ///
+        /// **Plan shapes.** By default the leaf returns intermediate results and an exchange on the key follows
+        /// (plan shape (a)); it is correct on any layout. With the hint `aggOptions(is_partitioned_by_group_by_keys=
+        /// 'true')` the leaf is the final aggregate and no exchange follows (plan shape (b)). **Hazard:** (b) trusts
+        /// that all rows of a key are on one server. On a layout where partitions are not exclusive to one server it
+        /// silently returns wrong results (a key once per server, with a partial funnel each); nothing validates it.
+        ///
+        /// **Not `FUNNEL_COUNT`.** Ordered funnel counts differ from SSE `FUNNEL_COUNT` by design: step k counts
+        /// users who did steps 1..k in order within the window, each user once in their entry bucket, so the numbers
+        /// are at most the unordered ones and will not match existing `FUNNEL_COUNT` dashboards.
+        public static final String SORTED_GROUP_BY_MODE = "sortedGroupByMode";
+
         public static final String NUM_REPLICA_GROUPS_TO_QUERY = "numReplicaGroupsToQuery";
         public static final String ORDERED_PREFERRED_POOLS = "orderedPreferredPools";
         public static final String USE_FIXED_REPLICA = "useFixedReplica";
@@ -1733,6 +1793,28 @@ public class CommonConstants {
     /// among many sorted ones. This default is chosen to tolerate that while still rejecting a mostly-unsorted table.
     /// It is a starting point rather than a measured optimum.
     public static final double DEFAULT_SORTED_SELECTION_MERGE_AUTO_MIN_SORTED_RATIO = 0.8;
+
+    /// Selects the sorted streaming GROUP BY ([Broker.Request.QueryOptionKey#SORTED_GROUP_BY_MODE]).
+    ///
+    /// The mode is a request, not a guarantee: the plan maker engages the sorted streaming path only when the query
+    /// shape qualifies (and, for `AUTO`, enough segments are sorted), and otherwise keeps the existing GROUP BY path
+    /// with identical results. See the option's documentation for when it engages, how unsorted, consuming and
+    /// null-key data and partitions are handled, the canonical funnel query and the hazard of plan shape (b).
+    public enum SortedGroupByMode {
+      /// Never use the sorted streaming GROUP BY.
+      OFF,
+      /// Use the sorted streaming GROUP BY whenever the query shape qualifies; otherwise fall back to the existing
+      /// path. Segments that are not sorted on the key hash-aggregate and sort their groups.
+      ON,
+      /// Engage like [#ON], but only when at least the sorted-segment ratio (the same
+      /// [Broker.Request.QueryOptionKey#SORTED_SELECTION_MERGE_AUTO_MIN_SORTED_RATIO] option the streaming selection
+      /// ORDER BY uses, not a separate one) of the queried segments are
+      /// sorted on the group-by column, since only sorted segments avoid the hash aggregation; otherwise fall back.
+      AUTO
+    }
+
+    public static final SortedGroupByMode DEFAULT_SORTED_GROUP_BY_MODE = SortedGroupByMode.OFF;
+
     /// Server-wide override of [#DEFAULT_SORTED_SELECTION_MERGE_AUTO_MIN_SORTED_RATIO], applied to queries that do not
     /// set the query option.
     public static final String SORTED_SELECTION_MERGE_AUTO_MIN_SORTED_RATIO =

@@ -465,6 +465,12 @@ public class LeafOperator extends MultiStageOperator implements ExplainableOpera
           break;
         case SORTED:
           break;
+        case SORTED_GROUP_BY_ENGAGED:
+          _statMap.merge(StatKey.SORTED_GROUP_BY_ENGAGED, Boolean.parseBoolean(entry.getValue()));
+          break;
+        case SORTED_GROUP_BY_FALLBACK_REASON:
+          _statMap.merge(StatKey.SORTED_GROUP_BY_FALLBACK_REASONS, Set.of(entry.getValue()));
+          break;
         default:
           throw new IllegalArgumentException("Unhandled leaf execution stat: " + key);
       }
@@ -729,7 +735,7 @@ public class LeafOperator extends MultiStageOperator implements ExplainableOpera
     assert resultRows != null && inputDataSchema != null;
     ColumnDataType[] inputStoredTypes = inputDataSchema.getStoredColumnDataTypes();
     ColumnDataType[] outputStoredTypes = _dataSchema.getStoredColumnDataTypes();
-    if (!Arrays.equals(inputStoredTypes, outputStoredTypes)) {
+    if (!Arrays.equals(inputStoredTypes, outputStoredTypes) || hasArrayType(outputStoredTypes)) {
       for (Object[] row : resultRows) {
         convertRow(row, inputStoredTypes, outputStoredTypes);
       }
@@ -737,11 +743,25 @@ public class LeafOperator extends MultiStageOperator implements ExplainableOpera
     return new RowHeapDataBlock(resultRows, _dataSchema, _requests.get(0).getQueryContext().getAggregationFunctions());
   }
 
+  private static boolean hasArrayType(ColumnDataType[] storedTypes) {
+    for (ColumnDataType storedType : storedTypes) {
+      if (storedType.isArray()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Converts the values whose stored type differs from the desired one. A list in an array column is converted even
+  /// when the stored types match: the final result of an array-returning aggregation (e.g. `ARRAY_AGG`,
+  /// `FUNNEL_COUNT`) is an `XxxArrayList` while the column is declared as the primitive array type, and the data block
+  /// serializer only accepts the primitive array.
   public static void convertRow(Object[] row, ColumnDataType[] inputStoredTypes, ColumnDataType[] outputStoredTypes) {
     int numColumns = row.length;
     for (int colId = 0; colId < numColumns; colId++) {
       Object value = row[colId];
-      if (value != null && inputStoredTypes[colId] != outputStoredTypes[colId]) {
+      if (value != null && (inputStoredTypes[colId] != outputStoredTypes[colId] || (outputStoredTypes[colId].isArray()
+          && value instanceof List))) {
         row[colId] = TypeUtils.convert(value, outputStoredTypes[colId]);
       }
     }
@@ -818,7 +838,13 @@ public class LeafOperator extends MultiStageOperator implements ExplainableOpera
     /// Number of remote accesses made directly, i.e. outside the buffers fetched for the query.
     NUM_DIRECT_REMOTE_ACCESSES(StatMap.Type.LONG),
     /// Number of bytes read by the direct remote accesses.
-    DIRECT_REMOTE_ACCESS_BYTES(StatMap.Type.LONG);
+    DIRECT_REMOTE_ACCESS_BYTES(StatMap.Type.LONG),
+    /// Whether the sorted streaming GROUP BY engaged on at least one worker of this leaf stage. Absent when the
+    /// `sortedGroupByMode` query option was not set or it did not engage.
+    SORTED_GROUP_BY_ENGAGED(StatMap.Type.BOOLEAN, null),
+    /// Why the requested sorted streaming GROUP BY did not engage, per worker. Absent when it engaged or was not
+    /// requested.
+    SORTED_GROUP_BY_FALLBACK_REASONS(StatMap.Type.STRING_SET, null);
     // IMPORTANT: When adding new StatKeys, make sure to either create the same key in BrokerResponseNativeV2.StatKey or
     //  call the constructor that accepts a String as last argument and set it to null.
     //  Otherwise the constructor will fail with an IllegalArgumentException which will not be caught and will
