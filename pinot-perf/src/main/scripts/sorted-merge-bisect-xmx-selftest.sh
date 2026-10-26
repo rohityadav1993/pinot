@@ -71,6 +71,22 @@ case "${SCENARIO}" in
     echo "OK segmentsProcessed=12"
     exit 0
     ;;
+  consuming_threshold)
+    # As threshold, for a run that asked for a consuming segment: setup is only complete once both lines are out.
+    echo "[arm4] reused"
+    echo "[arm4] built consuming segment x in 0.1s: 500 rows"
+    if [[ ${heap} -ge 300 ]]; then
+      echo "OK segmentsProcessed=12"
+      exit 0
+    fi
+    exit 3
+    ;;
+  consuming_build_oom)
+    # Died while building the consuming segment: the offline fixture was ready, the consuming one never was. That is
+    # the fixture's footprint, not the operator's, and must not be read as an OOM that steers the search.
+    echo "[arm4] reused"
+    exit 3
+    ;;
   never_survives)
     echo "[arm4] reused"
     exit 3
@@ -110,20 +126,24 @@ chmod +x "${WORK_DIR}/bin/java"
 run_scenario() {
   local scenario="$1"
   shift
-  SCENARIO="${scenario}" \
-  ARGV_LOG="${WORK_DIR}/argv.log" \
-  PATH="${WORK_DIR}/bin:${PATH}" \
-  CLASSES_DIR="${WORK_DIR}/classes" \
-  AUDIT_LOG="${WORK_DIR}/audit.csv" \
-  OVERLAPS="DISJOINT" \
-  LIMITS="1000" \
-  MODES="OFF" \
-  REPLICATES=1 \
-  REPEATS_OFF=1 \
-  ATTEMPT_TIMEOUT_S=1 \
-  ATTEMPT_KILL_GRACE_S=1 \
-  "$@" \
-  bash "${UNDER_TEST}" "${WORK_DIR}/cp.txt" 2>/dev/null | tail -1
+  # Through `env`, not bare assignments: the extra "$@" words are env overrides such as REPEATS_ON=0, and a shell only
+  # treats NAME=value as an assignment when it is written literally, not when it comes out of an expansion. Without
+  # `env` those words were run as a command, which failed silently into /dev/null -- so every refusal case below
+  # reported REFUSED without the script under test ever having seen the override.
+  env SCENARIO="${scenario}" \
+    ARGV_LOG="${WORK_DIR}/argv.log" \
+    PATH="${WORK_DIR}/bin:${PATH}" \
+    CLASSES_DIR="${WORK_DIR}/classes" \
+    AUDIT_LOG="${WORK_DIR}/audit.csv" \
+    OVERLAPS="DISJOINT" \
+    LIMITS="1000" \
+    MODES="OFF" \
+    REPLICATES=1 \
+    REPEATS_OFF=1 \
+    ATTEMPT_TIMEOUT_S=1 \
+    ATTEMPT_KILL_GRACE_S=1 \
+    "$@" \
+    bash "${UNDER_TEST}" "${WORK_DIR}/cp.txt" 2>/dev/null | tail -1
 }
 
 check() {
@@ -189,6 +209,29 @@ check "heap is pinned at both ends and the collector is explicit" \
     "-Xms64m -Xmx64m -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError" \
     "${measurement_launch}"
 
+echo "axes:"
+
+# Defaults must be the command line the script has always run. The probe's CLI is positional, so this is the tail
+# that matters: orderBy then keyCardinality, and no consumingRows at all.
+rm -f "${WORK_DIR}/argv.log"
+default_row="$(run_scenario always_survives)"
+default_tail="$(grep -m1 -- '-Xmx64m' "${WORK_DIR}/argv.log" | awk '{print $(NF-1), $NF}')"
+check "the default launch ends with the original 'TS_VAL 1' and passes nothing else" "TS_VAL 1" "${default_tail}"
+check "the default CSV row has exactly the original eight columns" \
+    "DISJOINT,OFF,1000,1,AT_OR_BELOW_LOW,,64,1" "${default_row}"
+
+rm -f "${WORK_DIR}/argv.log"
+axes_row="$(run_scenario consuming_threshold ORDER_BY=TS_ONLY KEY_CARDINALITY=100 CONSUMING_ROWS=500)"
+axes_tail="$(grep -m1 -- '-Xmx64m' "${WORK_DIR}/argv.log" | awk '{print $(NF-2), $(NF-1), $NF}')"
+check "non-default axes reach the probe in positional order" "TS_ONLY 100 500" "${axes_tail}"
+check "non-default axes are recorded on every CSV row" \
+    "DISJOINT,OFF,1000,1,BRACKET,284,300,1,TS_ONLY,100,500" "${axes_row}"
+
+# Not an OOM: the consuming segment never finished building, so the operator never ran.
+check "dying while building the consuming segment is not an operator measurement" \
+    "DISJOINT,OFF,1000,1,ERROR_FIXTURE_NOT_READY,,,1,TS_VAL,1,500" \
+    "$(run_scenario consuming_build_oom CONSUMING_ROWS=500)"
+
 echo "audit trail:"
 
 check "the per-attempt log header is the documented schema" \
@@ -213,6 +256,11 @@ refusal() {
 check "a zero repeat count is refused" "REFUSED" "$(refusal REPEATS_ON=0)"
 check "the removed TOLERANCE_MB knob is refused, not ignored" "REFUSED" "$(refusal TOLERANCE_MB=32)"
 check "a floor at or above the ceiling is refused" "REFUSED" "$(refusal LOW_MB=4096)"
+check "an unknown ORDER_BY is refused" "REFUSED" "$(refusal ORDER_BY=BOGUS)"
+check "a negative CONSUMING_ROWS is refused" "REFUSED" "$(refusal CONSUMING_ROWS=-1)"
+check "a LIMIT past INT_MAX is refused" "REFUSED" "$(refusal LIMITS=2147483648)"
+# Without this the refusals above could pass for the wrong reason (the script never starting at all).
+check "the widest valid LIMIT is accepted" "ACCEPTED" "$(refusal LIMITS=2147483647)"
 
 echo
 if [[ ${FAILURES} -eq 0 ]]; then
