@@ -51,12 +51,32 @@ import org.openjdk.jmh.runner.options.OptionsBuilder;
 /// this arm exists to test is about the ceiling, and the ceiling is measured separately by
 /// {@link SortedMergeMemoryProbe} under a bisected `-Xmx`. Report the two numbers separately and never mix them.
 ///
-/// <p>Run with allocation profiling, reduced iteration counts, and the build cache off:
+/// <p>Run with allocation profiling, reduced iteration counts, and the build cache off. JMH only reads its command line
+/// through `org.openjdk.jmh.Main`; this class's own `main` takes no arguments:
 /// ```
 /// ./mvnw -pl pinot-perf -am install -DskipTests -Ddevelocity.cache.local.enabled=false
-/// java -cp pinot-perf/target/classes:... org.apache.pinot.perf.sortedmerge.BenchmarkSortedMergeMemoryCrossover \
-///     -wi 1 -i 3 -f 1 -r 5s -w 5s -prof gc
+/// ./mvnw -pl pinot-perf dependency:build-classpath -Dmdep.outputFile=/tmp/arm4-cp.txt \
+///     -Ddevelocity.cache.local.enabled=false
+/// java -cp pinot-perf/target/classes:$(cat /tmp/arm4-cp.txt) org.openjdk.jmh.Main \
+///     BenchmarkSortedMergeMemoryCrossover -wi 1 -i 3 -f 1 -r 5s -w 5s -prof gc -jvmArgs "-Xmx24g -XX:+UseG1GC"
 /// ```
+///
+/// <p>The parameters below are named after their fields, underscore included, so an override is
+/// `-p _keyCardinality=1,100`, not `-p keyCardinality=1,100`.
+///
+/// <p>The grids the follow-up experiments run are fixed in `sorted-merge-scenarios.sh`, which pins the settings above,
+/// writes the host and git state next to the results, and queues the groups of cells so that one failure does not lose
+/// the rest. Each scenario overrides a few of the single-valued parameters below:
+///
+/// ```
+/// anchors    _keyCardinality=1      _limit=1000,1000000  _overlap=FULL,PARTIAL
+/// max-limit  _keyCardinality=1      _limit=2147483647
+/// low-k      _keyCardinality=1,100,10000,50000          _limit=1000,1000000
+/// consuming  _consumingRows=50000,1000000  _limit=1000,1000000,2147483647
+/// ```
+///
+/// <p>All four sweep `_mode` and `_orderBy` fully. `sorted-merge-scenarios.sh <scenario> --bisect` runs the matching
+/// cells through `sorted-merge-bisect-xmx.sh` for minimum surviving heap instead.
 ///
 /// <p>Hypothesis, with `L = limit + offset`, `D` = overlap depth and `W` = concurrent combine tasks: `ON` retains
 /// `D * min(L, MAX_DOC_PER_CALL)` plus a `blockSize` output buffer, while `OFF` retains roughly
@@ -84,6 +104,10 @@ import org.openjdk.jmh.runner.options.OptionsBuilder;
 @State(Scope.Benchmark)
 public class BenchmarkSortedMergeMemoryCrossover {
 
+  /// The default grid stops at 1_000_000. The scenarios in `sorted-merge-scenarios.sh` pick subsets of it (1000 and
+  /// 1000000) and add `2147483647`, i.e. `Integer.MAX_VALUE`, the widest LIMIT the SQL layer accepts with offset 0.
+  /// Nothing prunes at that value and every row the table holds is returned, so it is not part of the default grid:
+  /// a single invocation returns 5_000_000 rows.
   @Param({"10", "100", "1000", "10000", "100000", "1000000"})
   private int _limit;
 
@@ -115,7 +139,8 @@ public class BenchmarkSortedMergeMemoryCrossover {
 
   /// K, the fixture's {@link SortedMergeFixture#DEFAULT_KEY_CARDINALITY} knob: how many consecutive rows within a
   /// segment share one {@link SortedMergeFixture#TS_COL} value. Pinned to a single value, "1" -- the pre-existing
-  /// behaviour -- so the headline grid does not grow; override with `-p keyCardinality=1,100` to sweep it.
+  /// behaviour -- so the headline grid does not grow; override with `-p _keyCardinality=1,100` to sweep it. The
+  /// `low-k` scenario sweeps 1, 100, 10000 and 50000 (the last being `_rowsPerSegment`: one distinct key per segment).
   @Param({"1"})
   private int _keyCardinality;
 
@@ -131,7 +156,7 @@ public class BenchmarkSortedMergeMemoryCrossover {
   /// `QueryMultiThreadingUtils#MAX_NUM_THREADS_PER_QUERY` resolves to on a host with >= 20 cores (this box has 96).
   /// A single-valued `@Param` is deliberate: it keeps the headline grid at 36 configs while still recording the
   /// value in every JMH result row, and it can be overridden on the command line with
-  /// `-p maxExecutionThreads=1,2,5,10` to run a dedicated `W` sweep without editing code.
+  /// `-p _maxExecutionThreads=1,2,5,10` to run a dedicated `W` sweep without editing code.
   @Param({"10"})
   private int _maxExecutionThreads;
 
