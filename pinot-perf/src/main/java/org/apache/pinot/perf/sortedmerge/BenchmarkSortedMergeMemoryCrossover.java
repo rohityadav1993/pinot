@@ -119,6 +119,14 @@ public class BenchmarkSortedMergeMemoryCrossover {
   @Param({"1"})
   private int _keyCardinality;
 
+  /// Rows in the optional consuming segment appended after the offline ones, i.e. segment index `_numSegments`; see
+  /// [SortedMergeFixture]. "0" -- the default, and what every pre-existing result was measured with -- appends none.
+  /// Positive values are what the `consuming` scenario sweeps (50_000 and 1_000_000): the segment is mutable, so under
+  /// `ON` its leaf is a full scan plus top-K on the consumer thread rather than a sorted-prefix scan, which is the
+  /// cost this axis exists to expose. It is rebuilt in every forked JVM, off-heap, and is not cached on disk.
+  @Param({"0"})
+  private int _consumingRows;
+
   /// `maxExecutionThreads`, i.e. `W`. Pinned to a single value, "10", which is exactly what
   /// `QueryMultiThreadingUtils#MAX_NUM_THREADS_PER_QUERY` resolves to on a host with >= 20 cores (this box has 96).
   /// A single-valued `@Param` is deliberate: it keeps the headline grid at 36 configs while still recording the
@@ -235,8 +243,10 @@ public class BenchmarkSortedMergeMemoryCrossover {
   public void setUp() {
     _cpuMeter = SortedMergeCpuMeter.fromSystemProperty();
     _executorService = SortedMergeDriver.newBoundedExecutor(_maxExecutionThreads, _cpuMeter);
-    _segments = SortedMergeFixture.segments(_overlap, _numSegments, _rowsPerSegment, _keyCardinality);
-    int depth = SortedMergeFixture.measuredDepth(_overlap, _numSegments, _rowsPerSegment, _keyCardinality);
+    _segments =
+        SortedMergeFixture.segments(_overlap, _numSegments, _rowsPerSegment, _keyCardinality, _consumingRows);
+    int depth =
+        SortedMergeFixture.measuredDepth(_overlap, _numSegments, _rowsPerSegment, _keyCardinality, _consumingRows);
     // Parse the query and build the hundred per-segment plan nodes once, here, rather than inside the timed method.
     // That cost is the same on both arms so it would not change which one wins, but it is a fixed addition to every
     // measurement, and at small LIMIT it is large next to the merge itself -- which is exactly where the model
@@ -247,10 +257,10 @@ public class BenchmarkSortedMergeMemoryCrossover {
     // combine operator does not match the arm.
     SortedMergeDriver.Result probe = SortedMergeDriver.run(_prepared, _executorService, false, false);
     System.out.printf("[arm4] setup: overlap=%s depth=%d mode=%s limit=%d orderBy=%s blockSize=%d "
-            + "maxExecutionThreads=%d keyCardinality=%d numTasks=%d segmentsProcessed=%d operator=%s "
-            + "cpuMetering=%s%n", _overlap, depth, _mode, _limit, _orderBy, _blockSize, _maxExecutionThreads,
-        _keyCardinality, probe._numTasks, probe._numSegmentsProcessed, probe._combineOperatorClass.getSimpleName(),
-        _cpuMeter.isEnabled());
+            + "maxExecutionThreads=%d keyCardinality=%d consumingRows=%d numTasks=%d segmentsProcessed=%d "
+            + "operator=%s cpuMetering=%s%n", _overlap, depth, _mode, _limit, _orderBy, _blockSize,
+        _maxExecutionThreads, _keyCardinality, _consumingRows, probe._numTasks, probe._numSegmentsProcessed,
+        probe._combineOperatorClass.getSimpleName(), _cpuMeter.isEnabled());
   }
 
   @TearDown(Level.Trial)

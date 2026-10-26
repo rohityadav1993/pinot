@@ -96,11 +96,12 @@ public final class SortedMergeMemoryProbe {
     System.err.println(
         "  gate [numSegments] [rowsPerSegment] [blockSize] [maxExecutionThreads] [orderBy] [keyCardinality]");
     System.err.println("  run <overlap> <mode> <limit> [numSegments] [rowsPerSegment] [blockSize] "
-        + "[maxExecutionThreads] [orderBy] [keyCardinality]");
+        + "[maxExecutionThreads] [orderBy] [keyCardinality] [consumingRows]");
     System.err.println("  orderBy is one of " + Arrays.toString(OrderBy.values())
         + ", default " + OrderBy.TS_VAL + " (kept for CLI backward compatibility).");
     System.err.println("  keyCardinality defaults to " + SortedMergeFixture.DEFAULT_KEY_CARDINALITY
         + " (kept for CLI backward compatibility).");
+    System.err.println("  consumingRows defaults to 0: no consuming segment (kept for CLI backward compatibility).");
   }
 
   /// Step 3, guard G2. Returns 0 if every configuration agrees across the two arms.
@@ -261,20 +262,22 @@ public final class SortedMergeMemoryProbe {
     int maxExecutionThreads = intArg(args, 7, DEFAULT_MAX_EXECUTION_THREADS);
     OrderBy orderBy = orderByArg(args, 8);
     int keyCardinality = intArg(args, 9, SortedMergeFixture.DEFAULT_KEY_CARDINALITY);
+    int consumingRows = intArg(args, 10, 0);
 
     ExecutorService executorService = SortedMergeDriver.newBoundedExecutor(maxExecutionThreads);
     try {
       List<IndexSegment> segments =
-          SortedMergeFixture.segments(overlap, numSegments, rowsPerSegment, keyCardinality);
+          SortedMergeFixture.segments(overlap, numSegments, rowsPerSegment, keyCardinality, consumingRows);
       long startNs = System.nanoTime();
       SortedMergeDriver.Result result =
           SortedMergeDriver.run(
               SortedMergeDriver.prepare(segments, limit, mode, blockSize, maxExecutionThreads, orderBy),
               executorService, false, false);
       System.out.printf(
-          "OK overlap=%s mode=%s limit=%d orderBy=%s keyCardinality=%d rows=%d blocks=%d elapsedMs=%d maxHeapMb=%d "
-              + "numTasks=%d segmentsProcessed=%d%n", overlap, mode, limit, orderBy, keyCardinality,
-          result._numRows, result._numBlocks, (System.nanoTime() - startNs) / 1_000_000,
+          "OK overlap=%s mode=%s limit=%d orderBy=%s keyCardinality=%d consumingRows=%d rows=%d blocks=%d "
+              + "elapsedMs=%d maxHeapMb=%d numTasks=%d segmentsProcessed=%d%n", overlap, mode, limit, orderBy,
+          keyCardinality, consumingRows, result._numRows, result._numBlocks,
+          (System.nanoTime() - startNs) / 1_000_000,
           Runtime.getRuntime().maxMemory() >> 20, result._numTasks, result._numSegmentsProcessed);
       return 0;
     } finally {

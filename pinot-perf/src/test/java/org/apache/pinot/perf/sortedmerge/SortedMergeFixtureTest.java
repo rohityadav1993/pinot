@@ -24,13 +24,19 @@ import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
+import java.util.List;
 import org.apache.commons.io.FileUtils;
+import org.apache.pinot.perf.sortedmerge.SortedMergeFixture.Overlap;
+import org.apache.pinot.segment.local.indexsegment.mutable.MutableSegmentImpl;
+import org.apache.pinot.segment.spi.IndexSegment;
+import org.apache.pinot.segment.spi.datasource.DataSourceMetadata;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
+import static org.testng.Assert.assertSame;
 import static org.testng.Assert.assertTrue;
 
 
@@ -117,6 +123,50 @@ public class SortedMergeFixtureTest {
 
     assertFalse(first.exists());
     assertFalse(second.exists());
+  }
+
+  @Test
+  public void consumingSegmentIsAppendedLastAndKeepsValColUniqueAcrossTheMix() {
+    // A deliberately different row count (40, against 100 offline) is the point: valCol must stay unique because the
+    // consuming segment numbers from numSegments * rowsPerSegment, not from anything derived from its own size.
+    int numSegments = 3;
+    int rowsPerSegment = 100;
+    int consumingRows = 40;
+    try {
+      List<IndexSegment> segments =
+          SortedMergeFixture.segments(Overlap.PARTIAL, numSegments, rowsPerSegment, 1, consumingRows);
+
+      assertEquals(segments.size(), numSegments + 1);
+      IndexSegment consuming = segments.get(numSegments);
+      assertTrue(consuming instanceof MutableSegmentImpl, "the consuming segment must be mutable, and last");
+      assertEquals(consuming.getSegmentMetadata().getTotalDocs(), consumingRows);
+
+      long previousMax = Long.MIN_VALUE;
+      for (IndexSegment segment : segments) {
+        DataSourceMetadata valCol = segment.getDataSource(SortedMergeFixture.VAL_COL).getDataSourceMetadata();
+        long min = ((Number) valCol.getMinValue()).longValue();
+        long max = ((Number) valCol.getMaxValue()).longValue();
+        assertTrue(min > previousMax, "valCol ranges must be disjoint, but " + min + " <= " + previousMax);
+        previousMax = max;
+      }
+      // PARTIAL ranges here are [0,99], [10,109], [20,119] and, for the consuming segment at index 3, [30,69]: all
+      // four contain the midpoint 59. The mutable segment is measured too, which is what used to throw.
+      assertEquals(SortedMergeFixture.measuredDepth(Overlap.PARTIAL, numSegments, rowsPerSegment, 1, consumingRows),
+          numSegments + 1);
+      assertEquals(SortedMergeFixture.measuredDepth(Overlap.PARTIAL, numSegments, rowsPerSegment, 1, 0), numSegments);
+    } finally {
+      SortedMergeFixture.purgeAll();
+    }
+  }
+
+  @Test
+  public void zeroConsumingRowsReturnsExactlyTheOfflineSegments() {
+    try {
+      List<IndexSegment> offline = SortedMergeFixture.segments(Overlap.FULL, 2, 50, 1);
+      assertSame(SortedMergeFixture.segments(Overlap.FULL, 2, 50, 1, 0), offline);
+    } finally {
+      SortedMergeFixture.purgeAll();
+    }
   }
 
   /// Creates a key directory holding one file, so an assertion that it was deleted is about real content rather than
