@@ -36,6 +36,29 @@
 # that instrument is deliberately not built here.
 # ==============================================================================
 
+# ==============================================================================
+# AXES
+#
+# Every axis is an environment variable, and every default reproduces the script's original behaviour exactly -- the
+# same grid, the same java command lines, the same CSV and audit-log columns -- so an unset environment is a rerun of
+# what this script has always done.
+#
+#   LIMITS            space-separated LIMITs to bisect           default "1000 10000 100000 1000000"
+#                     (2147483647 is the widest LIMIT the SQL layer accepts with offset 0)
+#   OVERLAPS, MODES   space-separated                            default "DISJOINT PARTIAL FULL", "OFF ON"
+#   ORDER_BY          TS_VAL | TS_ONLY                           default TS_VAL
+#   KEY_CARDINALITY   K, rows sharing one tsCol value            default 1
+#   CONSUMING_ROWS    rows in the extra consuming segment        default 0 (none)
+#
+# A non-default ORDER_BY, KEY_CARDINALITY or CONSUMING_ROWS does two things so results from different axes cannot be
+# mistaken for one another: it suffixes the default audit-log name (-TS_ONLY, -k100, -c1000000, in that order), and it
+# appends order_by, key_cardinality and consuming_rows columns to the output CSV. The on-disk offline fixture already
+# keys on K (see SortedMergeFixture#cacheKey); the consuming segment has no on-disk form at all, because it is built
+# off-heap in each JVM, so it needs no name. Cost to budget for: that means every attempt at a CONSUMING_ROWS > 0 cell
+# rebuilds it before the merge starts (the probe logs the time), and such a cell is only classified as an operator
+# result once that build has finished -- see fixture_ready below.
+# ==============================================================================
+
 set -u -o pipefail
 
 CP_FILE="${1:-/tmp/arm4-cp.txt}"
@@ -69,6 +92,12 @@ MAX_EXECUTION_THREADS="${MAX_EXECUTION_THREADS:-10}"
 # Defaults to 1, which is byte-identical to the fixture this script has always built, so leaving this unset keeps
 # today's behaviour exactly. Override to make the tail-to-sort path's per-run heap hold more than one row.
 KEY_CARDINALITY="${KEY_CARDINALITY:-1}"
+# The two query shapes of SortedMergeDriver.OrderBy. TS_VAL is the probe's own default and what this script always
+# passed.
+ORDER_BY="${ORDER_BY:-TS_VAL}"
+# Rows in the optional consuming (mutable, off-heap) segment appended after the offline ones. 0 means none, which is
+# also the probe's default, so at 0 no argument is passed at all -- see PROBE_TAIL.
+CONSUMING_ROWS="${CONSUMING_ROWS:-0}"
 
 # How many consecutive runs must survive a heap size before it counts as surviving.
 #
@@ -115,7 +144,14 @@ ATTEMPT_KILL_GRACE_S="${ATTEMPT_KILL_GRACE_S:-60}"
 
 # One line per JVM launch. Roughly 900 attempts otherwise collapse into 48 CSV rows, which makes a suspicious
 # convergence or a non-monotone response impossible to reconstruct afterwards.
-AUDIT_LOG="${AUDIT_LOG:-/tmp/arm4-bisect-audit-$(date +%Y%m%dT%H%M%S).csv}"
+#
+# AXES_SUFFIX is empty at the default axes, which keeps the default name byte-for-byte what it was; see the AXES block
+# in the header for the same suffix's other use.
+AXES_SUFFIX=""
+if [[ "${ORDER_BY}" != "TS_VAL" ]]; then AXES_SUFFIX+="-${ORDER_BY}"; fi
+if [[ "${KEY_CARDINALITY}" != "1" ]]; then AXES_SUFFIX+="-k${KEY_CARDINALITY}"; fi
+if [[ "${CONSUMING_ROWS}" != "0" ]]; then AXES_SUFFIX+="-c${CONSUMING_ROWS}"; fi
+AUDIT_LOG="${AUDIT_LOG:-/tmp/arm4-bisect-audit${AXES_SUFFIX}-$(date +%Y%m%dT%H%M%S).csv}"
 
 # TOLERANCE_MB was this script's tolerance knob until the relative tolerance above replaced it. Silently ignoring a
 # value someone deliberately set is how a run gets done at settings nobody chose, so refuse instead.
@@ -132,6 +168,27 @@ for int_var in REPEATS_OFF REPEATS_ON REPLICATES LOW_MB HIGH_MB TOLERANCE_PCT TO
     ATTEMPT_KILL_GRACE_S NUM_SEGMENTS ROWS_PER_SEGMENT BLOCK_SIZE MAX_EXECUTION_THREADS KEY_CARDINALITY; do
   if ! [[ "${!int_var}" =~ ^[1-9][0-9]*$ ]]; then
     echo "${int_var} must be a positive integer, got '${!int_var}'" >&2
+    exit 1
+  fi
+done
+
+case "${ORDER_BY}" in
+  TS_VAL | TS_ONLY) ;;
+  *)
+    echo "ORDER_BY must be TS_VAL or TS_ONLY, got '${ORDER_BY}'" >&2
+    exit 1
+    ;;
+esac
+# Zero is meaningful here (no consuming segment), unlike every knob in the loop above, so it has its own check.
+if ! [[ "${CONSUMING_ROWS}" =~ ^(0|[1-9][0-9]*)$ ]]; then
+  echo "CONSUMING_ROWS must be a non-negative integer, got '${CONSUMING_ROWS}'" >&2
+  exit 1
+fi
+# A LIMIT past INT_MAX would not parse in the SQL layer, and the probe would fail it as a plain harness error on every
+# attempt of the cell; refuse it up front instead.
+for limit in "${LIMITS[@]}"; do
+  if ! [[ "${limit}" =~ ^[1-9][0-9]{0,9}$ ]] || (( limit > 2147483647 )); then
+    echo "every LIMITS entry must be an integer in 1..2147483647, got '${limit}'" >&2
     exit 1
   fi
 done
@@ -183,6 +240,15 @@ CP="${CLASSES_DIR}:$(cat "${CP_FILE}")"
 # -Xms is set equal to -Xmx per attempt, in attempt_once.
 JVM_FLAGS=(-XX:+UseG1GC -XX:+ExitOnOutOfMemoryError)
 
+# The probe's CLI is positional, so every argument after <limit> has to be spelled out to reach a later one:
+#   [numSegments] [rowsPerSegment] [blockSize] [maxExecutionThreads] [orderBy] [keyCardinality] [consumingRows]
+# This is the part from orderBy onward. consumingRows is appended only when it is positive; at 0 the probe's own default
+# is 0, and leaving it off keeps the default command line identical to what this script has always run.
+PROBE_TAIL=("${ORDER_BY}" "${KEY_CARDINALITY}")
+if (( CONSUMING_ROWS > 0 )); then
+  PROBE_TAIL+=("${CONSUMING_ROWS}")
+fi
+
 # Identifies the attempt currently in flight, for the audit log. Set by the cell loop and by attempt() rather than
 # threaded through every signature, which would make the call sites unreadable for no gain.
 REPLICATE=0
@@ -205,6 +271,19 @@ audit() {
   local overlap="$1" mode="$2" limit="$3" heap_mb="$4" outcome="$5" elapsed="$6" detail="$7"
   printf '%d,%s,%s,%s,%d,%d,%d,%s,%d,%s\n' "${REPLICATE}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${overlap}" "${mode}" \
       "${limit}" "${heap_mb}" "${REPEAT_INDEX}" "${outcome}" "${elapsed}" "${detail}" >>"${AUDIT_LOG}"
+}
+
+# Whether the probe's output shows setup finished: the offline fixture was built or reused and, when a consuming
+# segment was requested, that was built too. The consuming segment is built after the offline ones, so at a tiny -Xmx
+# an OOM while building it would otherwise follow a "[arm4] reused" line and be classified as the operator running
+# out of heap -- the fixture's own footprint reported as the operator's, the exact miscategorisation the exit-2 path
+# exists to prevent. Requiring its own log line closes that.
+fixture_ready() {
+  grep -qE "\[arm4\] (built|reused)" <<<"$1" || return 1
+  if (( CONSUMING_ROWS > 0 )); then
+    grep -q "\[arm4\] built consuming segment" <<<"$1" || return 1
+  fi
+  return 0
 }
 
 # Runs one configuration at one heap size.
@@ -233,14 +312,12 @@ attempt_once() {
   local overlap="$1" mode="$2" limit="$3" heap_mb="$4"
   local out status started elapsed
   started=${SECONDS}
-  # Trailing "TS_VAL" pins the pre-existing query shape explicitly so KEY_CARDINALITY can occupy the argument slot
-  # after it; SortedMergeMemoryProbe's CLI is positional, so KEY_CARDINALITY cannot be passed without naming the
-  # orderBy argument that comes before it. TS_VAL is the probe's own default, so this changes nothing when
-  # KEY_CARDINALITY is left at 1.
+  # PROBE_TAIL carries orderBy, keyCardinality and (when positive) consumingRows; see its definition for why they travel
+  # together. At the default axes it expands to exactly the "TS_VAL 1" this call always ended with.
   out=$(timeout --kill-after="${ATTEMPT_KILL_GRACE_S}" "${ATTEMPT_TIMEOUT_S}" \
         java -Xms"${heap_mb}"m -Xmx"${heap_mb}"m "${JVM_FLAGS[@]}" -cp "${CP}" "${MAIN_CLASS}" \
         run "${overlap}" "${mode}" "${limit}" "${NUM_SEGMENTS}" "${ROWS_PER_SEGMENT}" "${BLOCK_SIZE}" \
-        "${MAX_EXECUTION_THREADS}" TS_VAL "${KEY_CARDINALITY}" 2>&1)
+        "${MAX_EXECUTION_THREADS}" "${PROBE_TAIL[@]}" 2>&1)
   status=$?
   elapsed=$(( SECONDS - started ))
 
@@ -262,7 +339,7 @@ attempt_once() {
     return 4
   fi
 
-  if ! grep -qE "\[arm4\] (built|reused)" <<<"${out}"; then
+  if ! fixture_ready "${out}"; then
     audit "${overlap}" "${mode}" "${limit}" "${heap_mb}" FIXTURE_NOT_READY "${elapsed}" "exit=${status}"
     return 2
   fi
@@ -369,8 +446,8 @@ prebuild() {
   for overlap in "${OVERLAPS[@]}"; do
     echo "prebuilding ${overlap} fixture..." >&2
     java -Xmx8g -XX:+UseG1GC -cp "${CP}" "${MAIN_CLASS}" run "${overlap}" OFF 10 \
-         "${NUM_SEGMENTS}" "${ROWS_PER_SEGMENT}" "${BLOCK_SIZE}" "${MAX_EXECUTION_THREADS}" TS_VAL \
-         "${KEY_CARDINALITY}" >&2 || {
+         "${NUM_SEGMENTS}" "${ROWS_PER_SEGMENT}" "${BLOCK_SIZE}" "${MAX_EXECUTION_THREADS}" \
+         "${PROBE_TAIL[@]}" >&2 || {
       echo "prebuild failed for ${overlap}; aborting" >&2
       exit 1
     }
@@ -381,6 +458,9 @@ echo "measuring minimum surviving heap under pinned G1 (-Xms=-Xmx, -XX:+UseG1GC)
 echo "  overlaps: ${OVERLAPS[*]}" >&2
 echo "  limits:   ${LIMITS[*]}" >&2
 echo "  modes:    ${MODES[*]} (x ${REPLICATES} replicates)" >&2
+if [[ -n "${AXES_SUFFIX}" ]]; then
+  echo "  orderBy=${ORDER_BY}, consumingRows=${CONSUMING_ROWS} (non-default axes: CSV gains three trailing columns)" >&2
+fi
 echo "  keyCardinality=${KEY_CARDINALITY}, range ${LOW_MB}-${HIGH_MB}MB, per-attempt timeout ${ATTEMPT_TIMEOUT_S}s" >&2
 echo "  per-attempt audit log: ${AUDIT_LOG}" >&2
 
@@ -391,7 +471,15 @@ prebuild
 # (low_mb, high_mb] -- and both bounds were tried, so neither is an interpolation. consecutive_runs_required is the
 # unanimity threshold behind the survival at high_mb; at 1 that would be a single observation of a value that varies
 # between runs, which is why no arm is set to 1.
-echo "overlap,mode,limit,replicate,outcome,low_mb,high_mb,consecutive_runs_required"
+# At non-default axes the three axis values are appended to every row, so a CSV is self-describing when several runs'
+# output ends up concatenated or compared; at the defaults the columns are exactly the original eight.
+AXES_HEADER=""
+AXES_ROW=""
+if [[ -n "${AXES_SUFFIX}" ]]; then
+  AXES_HEADER=",order_by,key_cardinality,consuming_rows"
+  AXES_ROW=",${ORDER_BY},${KEY_CARDINALITY},${CONSUMING_ROWS}"
+fi
+echo "overlap,mode,limit,replicate,outcome,low_mb,high_mb,consecutive_runs_required${AXES_HEADER}"
 
 for overlap in "${OVERLAPS[@]}"; do
   for limit in "${LIMITS[@]}"; do
@@ -400,7 +488,7 @@ for overlap in "${OVERLAPS[@]}"; do
       for (( replicate = 1; replicate <= REPLICATES; replicate++ )); do
         REPLICATE=${replicate}
         result=$(measure_cell "${overlap}" "${mode}" "${limit}")
-        echo "${overlap},${mode},${limit},${replicate},${result},${repeats}"
+        echo "${overlap},${mode},${limit},${replicate},${result},${repeats}${AXES_ROW}"
       done
     done
   done
