@@ -26,6 +26,7 @@ import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.channels.OverlappingFileLockException;
+import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
@@ -33,12 +34,17 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
 import org.apache.commons.io.FileUtils;
+import org.apache.pinot.common.metadata.segment.SegmentZKMetadata;
 import org.apache.pinot.segment.local.indexsegment.immutable.ImmutableSegmentLoader;
+import org.apache.pinot.segment.local.indexsegment.mutable.MutableSegmentImpl;
+import org.apache.pinot.segment.local.io.writer.impl.MmapMemoryManager;
+import org.apache.pinot.segment.local.realtime.impl.RealtimeSegmentConfig;
+import org.apache.pinot.segment.local.realtime.impl.RealtimeSegmentStatsHistory;
 import org.apache.pinot.segment.local.segment.creator.impl.SegmentIndexCreationDriverImpl;
 import org.apache.pinot.segment.local.segment.readers.GenericRowRecordReader;
-import org.apache.pinot.segment.spi.ColumnMetadata;
 import org.apache.pinot.segment.spi.IndexSegment;
 import org.apache.pinot.segment.spi.creator.SegmentGeneratorConfig;
+import org.apache.pinot.segment.spi.datasource.DataSourceMetadata;
 import org.apache.pinot.spi.config.table.TableConfig;
 import org.apache.pinot.spi.config.table.TableType;
 import org.apache.pinot.spi.data.FieldSpec;
@@ -119,6 +125,32 @@ import org.apache.pinot.spi.utils.builder.TableConfigBuilder;
 /// assumed -- see [#measuredDepth] and guard G3 -- and both the build and reuse log lines print it. Report results
 /// against the measured depth for the (overlap, K) pair actually run, never against the depth the {@link Overlap}
 /// constant documents for K=1.
+///
+/// <p>`consumingRows` is a third, optional axis: when positive, one extra *consuming* segment -- a
+/// {@link MutableSegmentImpl}, the thing a realtime server queries while it is still ingesting -- is appended after
+/// the offline segments, as segment index `numSegments` (so 100 offline + 1 consuming by default). It uses the same
+/// row formula as the offline segments, with its own `base` chosen by {@link Overlap} for that index, so under
+/// DISJOINT it extends the key range past every offline segment, under PARTIAL it lands inside the offline ranges and
+/// under FULL it shares the common base. Zero, the default, builds no such segment and leaves every existing cache
+/// key, fixture and result unchanged.
+///
+/// <p>The consuming segment is deliberately *not* cached on disk. It is built in this JVM, off-heap, with the
+/// {@link MmapMemoryManager} that `RealtimeSegmentDataManager` selects by default (`realtime.alloc.offheap=true`), in a
+/// temporary directory that is deleted by {@link #destroyAll()}. A mutable segment has no on-disk form to reuse, so
+/// every JVM -- every JMH fork, every bisection attempt -- pays its build cost again; the build time and off-heap
+/// footprint are logged once per JVM so that cost is visible rather than hidden in setup. Its tsCol dictionary and
+/// the inverted index the realtime `RealtimeSegmentConfig.Builder` adds on a table's sorted column are built exactly
+/// as production would build them, rather than switched off to make the segment cheaper.
+///
+/// <p>What the consuming segment changes about the query is not the data but the leaf: a mutable data source never
+/// reports itself sorted, so under `ON` its leaf is the ordinary `SelectionOrderByOperator` -- a full scan plus top-K
+/// on the consumer thread -- and the streaming combine discards its min/max rather than trust it. That is the
+/// behaviour this axis exists to exercise.
+///
+/// <p>{@link #VAL_COL} stays globally unique across the whole mix because the consuming segment numbers its rows from
+/// `numSegments * rowsPerSegment`, *not* from `numSegments * consumingRows`: the offline segments occupy
+/// `[0, numSegments * rowsPerSegment)`, so the consuming segment's values start just above that range whatever its
+/// own row count is. [#buildConsuming] rejects a combination that would overflow the INT column.
 public final class SortedMergeFixture {
   private SortedMergeFixture() {
   }
@@ -169,6 +201,14 @@ public final class SortedMergeFixture {
       new TableConfigBuilder(TableType.OFFLINE).setTableName(RAW_TABLE_NAME).setSortedColumn(TS_COL)
           .setNoDictionaryColumns(List.of(PAYLOAD_COL)).build();
 
+  /// The realtime twin of [#TABLE_CONFIG], used only for the consuming segment. Same sorted column and the same raw
+  /// payload column; `RealtimeSegmentConfig.Builder(TableConfig, Schema)` derives the mutable segment's index set from
+  /// it, including the inverted index it adds on a dictionary-encoded sorted column, which is what a production
+  /// realtime table with a `sortedColumn` gets.
+  private static final TableConfig REALTIME_TABLE_CONFIG =
+      new TableConfigBuilder(TableType.REALTIME).setTableName(RAW_TABLE_NAME).setSortedColumn(TS_COL)
+          .setNoDictionaryColumns(List.of(PAYLOAD_COL)).build();
+
   /// How far the per-segment ranges of {@link #TS_COL} overlap one another, which is the multiplier in the retention
   /// model. Depth is the number of segments whose `[min, max]` range contains a given value.
   public enum Overlap {
@@ -186,6 +226,25 @@ public final class SortedMergeFixture {
 
   private static final Map<String, List<IndexSegment>> SEGMENT_CACHE = new ConcurrentHashMap<>();
   private static final Map<String, Integer> DEPTH_CACHE = new ConcurrentHashMap<>();
+  /// In-JVM only, keyed like [#SEGMENT_CACHE] plus a `_consuming<N>` suffix. Never persisted: see the class javadoc.
+  private static final Map<String, ConsumingSegment> CONSUMING_CACHE = new ConcurrentHashMap<>();
+
+  /// A built consuming segment together with what has to be released with it: the off-heap memory manager is closed
+  /// by [MutableSegmentImpl#destroy], but the temporary directory its mmap files and consumer directory live in is not.
+  private static final class ConsumingSegment {
+    final MutableSegmentImpl _segment;
+    final File _dir;
+
+    ConsumingSegment(MutableSegmentImpl segment, File dir) {
+      _segment = segment;
+      _dir = dir;
+    }
+
+    void destroy() {
+      _segment.destroy();
+      FileUtils.deleteQuietly(_dir);
+    }
+  }
 
   static {
     // Registered here rather than in a main() so that it also fires in the JVM JMH forks, which is where the fixture
@@ -221,6 +280,50 @@ public final class SortedMergeFixture {
     String key = cacheKey(overlap, numSegments, rowsPerSegment, keyCardinality);
     return SEGMENT_CACHE.computeIfAbsent(key,
         k -> loadOrBuild(overlap, numSegments, rowsPerSegment, keyCardinality, k));
+  }
+
+  /// As [#segments(Overlap, int, int, int)], plus -- when `consumingRows > 0` -- one consuming segment of that many
+  /// rows appended as the last element, at segment index `numSegments`. With `consumingRows == 0` this returns exactly
+  /// the offline list, so callers that pass 0 are byte-for-byte unchanged.
+  ///
+  /// <p>The returned list is a fresh one on every call (the offline half is shared, the list is not), so the caller
+  /// may keep it, but must not destroy any element: both halves are released by [#destroyAll()].
+  public static List<IndexSegment> segments(Overlap overlap, int numSegments, int rowsPerSegment, int keyCardinality,
+      int consumingRows) {
+    List<IndexSegment> offline = segments(overlap, numSegments, rowsPerSegment, keyCardinality);
+    if (consumingRows == 0) {
+      return offline;
+    }
+    String key = consumingKey(overlap, numSegments, rowsPerSegment, keyCardinality, consumingRows);
+    ConsumingSegment consuming = CONSUMING_CACHE.computeIfAbsent(key,
+        k -> buildConsuming(overlap, numSegments, rowsPerSegment, keyCardinality, consumingRows, k));
+    List<IndexSegment> all = new ArrayList<>(offline.size() + 1);
+    all.addAll(offline);
+    all.add(consuming._segment);
+    DEPTH_CACHE.computeIfAbsent(key, k -> measureDepth(all));
+    return all;
+  }
+
+  /// As [#measuredDepth(Overlap, int, int, int)], over the offline segments plus the consuming one when
+  /// `consumingRows > 0`. The consuming segment counts toward depth like any other: it is one more range that may
+  /// contain the midpoint, so under FULL a 100 + 1 mix reads 101 rather than 100.
+  public static int measuredDepth(Overlap overlap, int numSegments, int rowsPerSegment, int keyCardinality,
+      int consumingRows) {
+    if (consumingRows == 0) {
+      return measuredDepth(overlap, numSegments, rowsPerSegment, keyCardinality);
+    }
+    segments(overlap, numSegments, rowsPerSegment, keyCardinality, consumingRows);
+    Integer depth =
+        DEPTH_CACHE.get(consumingKey(overlap, numSegments, rowsPerSegment, keyCardinality, consumingRows));
+    if (depth == null) {
+      throw new IllegalStateException("No measured depth recorded for " + overlap + " with a consuming segment");
+    }
+    return depth;
+  }
+
+  private static String consumingKey(Overlap overlap, int numSegments, int rowsPerSegment, int keyCardinality,
+      int consumingRows) {
+    return cacheKey(overlap, numSegments, rowsPerSegment, keyCardinality) + "_consuming" + consumingRows;
   }
 
   /// As [#measuredDepth(Overlap, int, int, int)] with [#DEFAULT_KEY_CARDINALITY].
@@ -464,29 +567,106 @@ public final class SortedMergeFixture {
   /// arm's worst-case retention unreachable regardless of how the fixture is otherwise shaped.
   private static List<GenericRow> records(Overlap overlap, int segmentIndex, int rowsPerSegment,
       int keyCardinality) {
-    long base;
-    switch (overlap) {
-      case DISJOINT:
-        base = (long) segmentIndex * rowsPerSegment;
-        break;
-      case PARTIAL:
-        base = (long) segmentIndex * (rowsPerSegment / 10);
-        break;
-      case FULL:
-        base = 0L;
-        break;
-      default:
-        throw new IllegalArgumentException("Unknown overlap: " + overlap);
-    }
+    long base = baseFor(overlap, segmentIndex, rowsPerSegment);
     List<GenericRow> records = new ArrayList<>(rowsPerSegment);
     for (int j = 0; j < rowsPerSegment; j++) {
       GenericRow record = new GenericRow();
-      record.putValue(TS_COL, (base + j) / keyCardinality);
-      record.putValue(VAL_COL, segmentIndex * rowsPerSegment + j);
-      record.putValue(PAYLOAD_COL, PAYLOAD_FILLER + "_" + segmentIndex + "_" + j);
+      fillRow(record, base, segmentIndex, rowsPerSegment, j, keyCardinality);
       records.add(record);
     }
     return records;
+  }
+
+  /// First {@link #TS_COL} source value of segment `segmentIndex`, before dividing by K.
+  private static long baseFor(Overlap overlap, int segmentIndex, int rowsPerSegment) {
+    switch (overlap) {
+      case DISJOINT:
+        return (long) segmentIndex * rowsPerSegment;
+      case PARTIAL:
+        return (long) segmentIndex * (rowsPerSegment / 10);
+      case FULL:
+        return 0L;
+      default:
+        throw new IllegalArgumentException("Unknown overlap: " + overlap);
+    }
+  }
+
+  /// Writes row `j` of segment `segmentIndex` into `record`. The one place the row formula lives, shared by the
+  /// offline segments (which materialise a list) and the consuming segment (which streams a reused row, so a
+  /// million-row build does not hold a million rows on the heap -- that would make the fixture's own footprint the
+  /// thing a small `-Xmx` bisection ends up measuring).
+  ///
+  /// <p>`rowsPerSegment` is what places a segment, *not* its row count: it fixes `base` (see [#baseFor]) and the start
+  /// of the {@link #VAL_COL} range `[segmentIndex * rowsPerSegment, ...)`. A consuming segment with a different row
+  /// count therefore sits exactly where an `R`-row segment at that index would, and its `valCol` cannot collide with
+  /// an offline segment's.
+  private static void fillRow(GenericRow record, long base, int segmentIndex, int rowsPerSegment, int j,
+      int keyCardinality) {
+    record.putValue(TS_COL, (base + j) / keyCardinality);
+    record.putValue(VAL_COL, segmentIndex * rowsPerSegment + j);
+    record.putValue(PAYLOAD_COL, PAYLOAD_FILLER + "_" + segmentIndex + "_" + j);
+  }
+
+  /// Builds the consuming segment: an off-heap [MutableSegmentImpl] holding `consumingRows` rows, appended as segment
+  /// index `numSegments`. See the class javadoc for what it models and why it is rebuilt per JVM.
+  ///
+  /// <p>It is configured as a realtime table with a `sortedColumn` would configure it in production -- off-heap
+  /// allocation through [MmapMemoryManager], capacity equal to the row count, real (not mocked) stats history -- so
+  /// nothing about its leaf or its indexes is a harness artifact. The capacity is exact because the row count is known
+  /// up front; a production segment is sized by the flush threshold, which is the same number.
+  private static ConsumingSegment buildConsuming(Overlap overlap, int numSegments, int rowsPerSegment,
+      int keyCardinality, int consumingRows, String key) {
+    if (consumingRows < 0) {
+      throw new IllegalArgumentException("consumingRows must be >= 0, got " + consumingRows + " for " + key);
+    }
+    // valCol is an INT column. The consuming segment's values run up to numSegments * rowsPerSegment + consumingRows.
+    if ((long) numSegments * rowsPerSegment + consumingRows > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException(
+          "valCol would overflow INT with " + numSegments + " x " + rowsPerSegment + " offline rows plus "
+              + consumingRows + " consuming rows (" + key + ")");
+    }
+    long startNs = System.nanoTime();
+    File dir;
+    try {
+      dir = Files.createTempDirectory("pinot-arm4-consuming-").toFile();
+    } catch (IOException e) {
+      throw new RuntimeException("Failed to create a directory for the consuming segment " + key, e);
+    }
+    MutableSegmentImpl segment = null;
+    try {
+      String segmentName = key + "_seg_" + numSegments;
+      RealtimeSegmentStatsHistory statsHistory =
+          RealtimeSegmentStatsHistory.deserializeFrom(new File(dir, "stats.ser"));
+      MmapMemoryManager memoryManager = new MmapMemoryManager(dir.getAbsolutePath(), segmentName);
+      RealtimeSegmentConfig config =
+          new RealtimeSegmentConfig.Builder(REALTIME_TABLE_CONFIG, SCHEMA).setTableNameWithType(
+                  RAW_TABLE_NAME + "_REALTIME").setSegmentName(segmentName).setStreamName(RAW_TABLE_NAME)
+              .setSchema(SCHEMA).setCapacity(consumingRows).setAvgNumMultiValues(2)
+              .setSegmentZKMetadata(new SegmentZKMetadata(segmentName)).setOffHeap(true)
+              .setMemoryManager(memoryManager).setStatsHistory(statsHistory)
+              .setConsumerDir(new File(dir, "consumerDir").getAbsolutePath()).build();
+      segment = new MutableSegmentImpl(config, null);
+      long base = baseFor(overlap, numSegments, rowsPerSegment);
+      GenericRow row = new GenericRow();
+      for (int j = 0; j < consumingRows; j++) {
+        row.clear();
+        fillRow(row, base, numSegments, rowsPerSegment, j, keyCardinality);
+        segment.index(row, null);
+      }
+      if (segment.getNumDocsIndexed() != consumingRows) {
+        throw new IllegalStateException(
+            "Consuming segment indexed " + segment.getNumDocsIndexed() + " rows, expected " + consumingRows);
+      }
+      System.out.printf("[arm4] built consuming segment %s in %.1fs: %d rows, %.1f MiB off-heap allocated%n", key,
+          (System.nanoTime() - startNs) / 1e9, consumingRows, memoryManager.getTotalAllocatedBytes() / 1048576.0);
+      return new ConsumingSegment(segment, dir);
+    } catch (Exception e) {
+      if (segment != null) {
+        segment.destroy();
+      }
+      FileUtils.deleteQuietly(dir);
+      throw new RuntimeException("Failed to build the consuming segment " + key, e);
+    }
   }
 
   private static IndexSegment buildSegment(File outDir, String segmentName, List<GenericRow> records)
@@ -504,12 +684,17 @@ public final class SortedMergeFixture {
   }
 
   /// Guard G3. Counts the segments whose {@link #TS_COL} `[min, max]` range contains the midpoint of the global range.
+  ///
+  /// <p>Min and max are read through the segment's data source rather than `getSegmentMetadata().getColumnMetadataFor`,
+  /// because a [MutableSegmentImpl]'s segment metadata carries no per-column metadata and that call throws for it. For
+  /// an immutable segment the data source reports the same values straight from its column metadata, so the offline
+  /// depths are unchanged.
   private static int measureDepth(List<IndexSegment> segments) {
     long globalMin = Long.MAX_VALUE;
     long globalMax = Long.MIN_VALUE;
     List<long[]> ranges = new ArrayList<>(segments.size());
     for (IndexSegment segment : segments) {
-      ColumnMetadata metadata = segment.getSegmentMetadata().getColumnMetadataFor(TS_COL);
+      DataSourceMetadata metadata = segment.getDataSource(TS_COL).getDataSourceMetadata();
       long min = ((Number) metadata.getMinValue()).longValue();
       long max = ((Number) metadata.getMaxValue()).longValue();
       ranges.add(new long[]{min, max});
@@ -536,6 +721,7 @@ public final class SortedMergeFixture {
         segment.destroy();
       }
     }
+    destroyConsuming();
     SEGMENT_CACHE.clear();
     DEPTH_CACHE.clear();
     boolean keep = !"false".equalsIgnoreCase(System.getProperty(KEEP_PROPERTY));
@@ -554,10 +740,20 @@ public final class SortedMergeFixture {
         segment.destroy();
       }
     }
+    destroyConsuming();
     SEGMENT_CACHE.clear();
     DEPTH_CACHE.clear();
     System.out.printf("[arm4] purging on-disk fixture at %s%n", baseDir());
     deleteAllKeysUnderLock();
+  }
+
+  /// Destroys every consuming segment and deletes its temporary directory. Unlike the offline fixture this is
+  /// unconditional: [#KEEP_PROPERTY] governs the reusable on-disk cache, and a consuming segment has none.
+  private static void destroyConsuming() {
+    for (ConsumingSegment consuming : CONSUMING_CACHE.values()) {
+      consuming.destroy();
+    }
+    CONSUMING_CACHE.clear();
   }
 
   /// Deletes every key's on-disk directory under {@link #baseDir()}, but never a `.lock` file, and never a key's
