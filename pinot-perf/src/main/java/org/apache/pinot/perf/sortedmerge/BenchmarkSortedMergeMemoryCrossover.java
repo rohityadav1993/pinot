@@ -180,6 +180,57 @@ public class BenchmarkSortedMergeMemoryCrossover {
     }
   }
 
+  /// How many segments the combine actually processed per invocation, reported as secondary metrics next to the
+  /// wall-clock score so the per-operation figure lands in the JMH JSON rather than only in the `[arm4] setup:` log
+  /// line, which records a single probe run taken before measurement starts.
+  ///
+  /// <p>That distinction matters for the `OFF` arm. `MinMaxValueBasedSelectionOrderByCombineOperator` prunes by
+  /// min/max against tasks that are already dispatched, so how many segments it touches varies from invocation to
+  /// invocation with thread scheduling; the setup probe is one draw from that distribution and cannot stand in for
+  /// the average over the measured invocations. The `ON` arm's count is deterministic, but it is reported the same
+  /// way so the two arms read from identical columns.
+  ///
+  /// <p>As with {@link CpuTimeCounter}, `Type.EVENTS` publishes the *sum* over an iteration and normalises nothing, so
+  /// the count is uninterpretable without the number of invocations that produced it. `segmentOps` is that divisor,
+  /// and the figure to report is
+  ///
+  /// ```
+  /// segments processed per operation = segmentsProcessed / segmentOps
+  /// ```
+  ///
+  /// <p>Unlike [CpuTimeCounter], this one is recorded on *every* invocation, whether or not CPU metering is on: the
+  /// count is read off the [SortedMergeDriver.Result] the invocation already returned, so it costs one field read and
+  /// one addition and cannot disturb the measurement. Both are reset at {@link Level#Iteration} for the same
+  /// per-iteration-raw-data reason given on [CpuTimeCounter].
+  @AuxCounters(AuxCounters.Type.EVENTS)
+  @State(Scope.Thread)
+  public static class SegmentsProcessedCounter {
+    private long _segmentsProcessed;
+    private long _segmentOps;
+
+    /// JMH names the secondary metric after this method, so the column is reported as `segmentsProcessed`.
+    public long segmentsProcessed() {
+      return _segmentsProcessed;
+    }
+
+    /// Invocations that contributed to [#segmentsProcessed], reported as `segmentOps`. The divisor, not a result in
+    /// itself.
+    public long segmentOps() {
+      return _segmentOps;
+    }
+
+    void add(int numSegmentsProcessed) {
+      _segmentsProcessed += numSegmentsProcessed;
+      _segmentOps++;
+    }
+
+    @Setup(Level.Iteration)
+    public void reset() {
+      _segmentsProcessed = 0;
+      _segmentOps = 0;
+    }
+  }
+
   @Setup(Level.Trial)
   public void setUp() {
     _cpuMeter = SortedMergeCpuMeter.fromSystemProperty();
@@ -213,14 +264,17 @@ public class BenchmarkSortedMergeMemoryCrossover {
   /// gate, and doing either here would charge the harness's own work -- up to a million row hashes per invocation --
   /// to the operator under measurement.
   @Benchmark
-  public long mergeTopK(CpuTimeCounter cpuTimeCounter) {
+  public long mergeTopK(CpuTimeCounter cpuTimeCounter, SegmentsProcessedCounter segmentsProcessedCounter) {
+    SortedMergeDriver.Result result;
     if (!_cpuMeter.isEnabled()) {
-      return SortedMergeDriver.run(_prepared, _executorService, false, false)._numRows;
+      result = SortedMergeDriver.run(_prepared, _executorService, false, false);
+    } else {
+      long cpuNanosBefore = _cpuMeter.cpuNanosBeforeWork();
+      result = SortedMergeDriver.run(_prepared, _executorService, false, false);
+      cpuTimeCounter.add(_cpuMeter.cpuNanosAfterWork() - cpuNanosBefore);
     }
-    long cpuNanosBefore = _cpuMeter.cpuNanosBeforeWork();
-    long numRows = SortedMergeDriver.run(_prepared, _executorService, false, false)._numRows;
-    cpuTimeCounter.add(_cpuMeter.cpuNanosAfterWork() - cpuNanosBefore);
-    return numRows;
+    segmentsProcessedCounter.add(result._numSegmentsProcessed);
+    return result._numRows;
   }
 
   public static void main(String[] args)
