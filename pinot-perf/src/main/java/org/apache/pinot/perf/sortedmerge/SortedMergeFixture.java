@@ -307,6 +307,14 @@ public final class SortedMergeFixture {
   /// As [#measuredDepth(Overlap, int, int, int)], over the offline segments plus the consuming one when
   /// `consumingRows > 0`. The consuming segment counts toward depth like any other: it is one more range that may
   /// contain the midpoint, so under FULL a 100 + 1 mix reads 101 rather than 100.
+  ///
+  /// <p><b>Read it with care once the consuming segment is larger than an offline one.</b> Depth is measured at the
+  /// midpoint of the *global* range, and a consuming segment of `consumingRows` much greater than `rowsPerSegment`
+  /// dominates that range: with 1_000_000 consuming rows the midpoint falls inside the consuming segment alone, so
+  /// FULL and PARTIAL both report depth 1 even though a hundred offline segments still overlap one another near the
+  /// start of the key space. At 50_000 consuming rows (equal to `rowsPerSegment`) the figure is meaningful. The number
+  /// is accurate for what it measures; it just stops describing the offline overlap, so do not label a 1_000_000-row
+  /// consuming cell by it.
   public static int measuredDepth(Overlap overlap, int numSegments, int rowsPerSegment, int keyCardinality,
       int consumingRows) {
     if (consumingRows == 0) {
