@@ -19,6 +19,7 @@
 package org.apache.pinot.perf.sortedmerge;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import org.apache.pinot.perf.sortedmerge.SortedMergeDriver.OrderBy;
@@ -26,9 +27,11 @@ import org.apache.pinot.perf.sortedmerge.SortedMergeDriver.Result;
 import org.testng.annotations.Test;
 
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotEquals;
 import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertThrows;
+import static org.testng.Assert.assertTrue;
 
 
 /// Tests the comparison primitives the arm-4 correctness gate is built from.
@@ -227,6 +230,31 @@ public class SortedMergeGateTest {
     Result on = result(2, 222L, tsDigest, onRows);
     assertEquals(SortedMergeMemoryProbe.cellVerdict(off, on, OrderBy.TS_VAL, true),
         "multiset digest differs (OFF=111 ON=222)");
+  }
+
+  @Test
+  public void gateCoversTheWidestLimitAndNeverRetainsRowsForIt() {
+    // The widest LIMIT must stay in the sweep: it is the cell where nothing prunes, so it is where a dropped block
+    // would cost the most rows. And it must be compared by digest, because retaining Integer.MAX_VALUE worth of rows
+    // is exactly the heap the operators under test are being measured for.
+    assertTrue(Arrays.stream(SortedMergeMemoryProbe.GATE_LIMITS).anyMatch(limit -> limit == Integer.MAX_VALUE));
+    assertFalse(SortedMergeMemoryProbe.retainsRows(Integer.MAX_VALUE));
+    assertFalse(SortedMergeMemoryProbe.retainsRows(1_000_000));
+    assertTrue(SortedMergeMemoryProbe.retainsRows(10_000), "the boundary limit is still compared as a full multiset");
+    assertFalse(SortedMergeMemoryProbe.retainsRows(10_001));
+  }
+
+  @Test
+  public void aMissingConsumingBlockFailsOnRowCountAtTheWidestLimit() {
+    // What a schema-mismatched mutable block silently dropped by the merge looks like to the gate: the ON arm
+    // returns the offline rows only, so the counts differ by exactly the consuming segment's rows. The row-count
+    // check has to catch it before either digest is consulted, and with no rows retained.
+    Result off = result(5_050_000L, 7L, 7L, null);
+    Result on = result(5_000_000L, 7L, 7L, null);
+    assertEquals(SortedMergeMemoryProbe.cellVerdict(off, on, OrderBy.TS_VAL, false),
+        "row count OFF=5050000 ON=5000000");
+    assertEquals(SortedMergeMemoryProbe.cellVerdict(off, on, OrderBy.TS_ONLY, false),
+        "row count OFF=5050000 ON=5000000");
   }
 
   @Test

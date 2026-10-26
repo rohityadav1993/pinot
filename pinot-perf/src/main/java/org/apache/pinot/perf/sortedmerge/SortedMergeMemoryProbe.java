@@ -55,7 +55,19 @@ public final class SortedMergeMemoryProbe {
   /// comparison at a million rows would cost more heap than the operators under test.
   private static final int FULL_MULTISET_LIMIT = 10_000;
 
-  private static final int[] GATE_LIMITS = {10, 100, 1_000, 10_000, 100_000, 1_000_000};
+  /// `Integer.MAX_VALUE` is the widest LIMIT the SQL layer accepts with offset 0, and the cell where every row the
+  /// table holds comes back from both arms: nothing prunes, the per-segment top-K never fills, and the merge has to
+  /// drain all of it. It is above [#FULL_MULTISET_LIMIT], so it is compared by row count plus digest like the
+  /// 100_000 and 1_000_000 cells, never by retained rows.
+  @VisibleForTesting
+  static final int[] GATE_LIMITS = {10, 100, 1_000, 10_000, 100_000, 1_000_000, Integer.MAX_VALUE};
+
+  /// Whether the gate retains both arms' rows for a limit, i.e. whether the full multiset (and sortedness) comparison
+  /// is available. The one definition, so the gate and its test cannot disagree about where retention stops.
+  @VisibleForTesting
+  static boolean retainsRows(int limit) {
+    return limit <= FULL_MULTISET_LIMIT;
+  }
 
   public static void main(String[] args) {
     if (args.length == 0) {
@@ -94,7 +106,8 @@ public final class SortedMergeMemoryProbe {
   private static void usage() {
     System.err.println("Usage:");
     System.err.println(
-        "  gate [numSegments] [rowsPerSegment] [blockSize] [maxExecutionThreads] [orderBy] [keyCardinality]");
+        "  gate [numSegments] [rowsPerSegment] [blockSize] [maxExecutionThreads] [orderBy] [keyCardinality] "
+            + "[consumingRows]");
     System.err.println("  run <overlap> <mode> <limit> [numSegments] [rowsPerSegment] [blockSize] "
         + "[maxExecutionThreads] [orderBy] [keyCardinality] [consumingRows]");
     System.err.println("  orderBy is one of " + Arrays.toString(OrderBy.values())
@@ -113,6 +126,13 @@ public final class SortedMergeMemoryProbe {
   /// `tsCol` values, and -- where rows are retained -- their full multiset and sortedness. See
   /// [SortedMergeDriver.OrderBy#TS_ONLY].
   ///
+  /// <p>With `consumingRows > 0` every cell runs over the offline segments plus one mutable consuming segment, and the
+  /// bar is unchanged: `ON` must return what `OFF` returns. That is a real check rather than a formality. The consuming
+  /// segment takes a different leaf under `ON` (a full-scan `SelectionOrderByOperator`, never the sorted-prefix scan),
+  /// and the merge drops a block whose schema does not match, so a mutable-versus-immutable disagreement about column
+  /// types would surface here as missing rows. The gate is run per `keyCardinality`, per [OrderBy] and per
+  /// `consumingRows`; a single invocation covers one such combination across all overlaps and [#GATE_LIMITS].
+  ///
   /// <p>Both digests are computed for both shapes; which one is *compared* is decided here, per shape, and never by
   /// omission. The full-row digest is meaningless under [OrderBy#TS_ONLY] and is simply not consulted on that branch.
   /// Every gate line prints a `checked=[...]` tag naming the level that actually ran, so a cell that fell back to a
@@ -124,17 +144,20 @@ public final class SortedMergeMemoryProbe {
     int maxExecutionThreads = intArg(args, 4, DEFAULT_MAX_EXECUTION_THREADS);
     OrderBy orderBy = orderByArg(args, 5);
     int keyCardinality = intArg(args, 6, SortedMergeFixture.DEFAULT_KEY_CARDINALITY);
+    int consumingRows = intArg(args, 7, 0);
 
     ExecutorService executorService = SortedMergeDriver.newBoundedExecutor(maxExecutionThreads);
     List<String> failures = new ArrayList<>();
+    int numPassed = 0;
     boolean strict = orderBy == OrderBy.TS_VAL;
     try {
       for (SortedMergeFixture.Overlap overlap : SortedMergeFixture.Overlap.values()) {
         List<IndexSegment> segments =
-            SortedMergeFixture.segments(overlap, numSegments, rowsPerSegment, keyCardinality);
-        int depth = SortedMergeFixture.measuredDepth(overlap, numSegments, rowsPerSegment, keyCardinality);
+            SortedMergeFixture.segments(overlap, numSegments, rowsPerSegment, keyCardinality, consumingRows);
+        int depth =
+            SortedMergeFixture.measuredDepth(overlap, numSegments, rowsPerSegment, keyCardinality, consumingRows);
         for (int limit : GATE_LIMITS) {
-          boolean collectRows = limit <= FULL_MULTISET_LIMIT;
+          boolean collectRows = retainsRows(limit);
           SortedMergeDriver.Result off =
               SortedMergeDriver.run(
                   SortedMergeDriver.prepare(segments, limit, SortedSelectionMergeMode.OFF, blockSize,
@@ -143,13 +166,16 @@ public final class SortedMergeMemoryProbe {
               SortedMergeDriver.run(
                   SortedMergeDriver.prepare(segments, limit, SortedSelectionMergeMode.ON, blockSize,
                       maxExecutionThreads, orderBy), executorService, collectRows, true);
-          String config =
-              overlap + " depth=" + depth + " limit=" + limit + " keyCardinality=" + keyCardinality;
+          // consumingRows is printed only when there is a consuming segment, so a gate line for the offline-only
+          // fixture reads exactly as it always has.
+          String config = overlap + " depth=" + depth + " limit=" + limit + " keyCardinality=" + keyCardinality
+              + (consumingRows > 0 ? " consumingRows=" + consumingRows : "");
           String failureReason = cellVerdict(off, on, orderBy, collectRows);
           if (failureReason != null) {
             failures.add(config + ": " + failureReason);
             continue;
           }
+          numPassed++;
 
           if (strict) {
             System.out.printf(
@@ -184,10 +210,11 @@ public final class SortedMergeMemoryProbe {
     }
 
     if (failures.isEmpty()) {
-      System.out.println("[arm4] gate PASSED for all configurations");
+      System.out.println("[arm4] gate PASSED for all configurations (" + numPassed + " cells)");
       return 0;
     }
-    System.out.println("[arm4] gate FAILED:");
+    System.out.println("[arm4] gate FAILED: " + failures.size() + " of " + (failures.size() + numPassed)
+        + " cells");
     for (String failure : failures) {
       System.out.println("  " + failure);
     }
