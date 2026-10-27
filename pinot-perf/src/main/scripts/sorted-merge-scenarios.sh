@@ -41,18 +41,39 @@
 #   low-k      K in 1, 100, 10000, 50000; all three overlaps; LIMIT 1000 and 1000000. K is how many consecutive rows share
 #              a tsCol value, and 50000 is rowsPerSegment, i.e. one distinct key per segment. K > 1 is what lets the
 #              tail-to-sort path's per-run heap hold more than one row.                  96 cells (24 per K).
-#   consuming  consumingRows in 50000, 1000000; K=1; all three overlaps; LIMIT 1000, 1000000 and 2147483647. One mutable
-#              off-heap segment is added after the 100 offline ones, so under ON its leaf is a full scan plus top-K.
+#   consuming  One mutable off-heap consuming segment is added after the 100 offline ones; K=1; LIMIT 1000, 1000000 and
+#              2147483647. Under ON its leaf is a full scan plus top-K, and the combine never prunes it.
+#                TAIL (consuming tail beyond offline keys), consumingRows 50000 and 1000000, all three overlaps:
+#                  72 cells. The consuming keys run past (or, at 50000, sit inside) the offline keys, so at a small
+#                  LIMIT the segment is scanned in full but adds nothing to the result.
+#                IN_DOMAIN (consuming keys rescaled into the offline key domain), FULL only, consumingRows 50000 and
+#                  1000000: 24 cells. The consuming rows interleave with the offline rows and compete for the LIMIT,
+#                  which TAIL cannot show. FULL only because DISJOINT and PARTIAL have no single key domain.
 #              The limits are one small (the leaf's full scan is the whole cost and the merge's is negligible), one
 #              large (the headline cell, where the merge's retention matters) and the maximum (everything returns,
 #              consuming rows included). 10000 and 100000 are left out: they sit between regimes the two ends already
-#              bracket, and each added limit costs 12 cells per consumingRows value. The no-consuming baselines for
-#              these limits come from the anchors and max-limit scenarios (K=1, consumingRows=0) rather than being
-#              re-run here, so compare across scenarios only for runs from the same build on the same host.   72 cells.
+#              bracket, and each added limit costs 12 cells per TAIL consumingRows value. The no-consuming baselines
+#              for these limits come from the anchors and max-limit scenarios (K=1, consumingRows=0) rather than being
+#              re-run here, so compare across scenarios only for runs from the same build on the same host.   96 cells.
 #
-# JMH settings, pinned: -f 1 -wi 1 -i 3 -r 5s -w 5s -prof gc -rf json. The forked JVM gets -Xmx${JAVA_XMX} and
-# -XX:+UseG1GC and nothing else (plus -Darm4.cpuTime=true when CPU_TIME=true). Those are the only knobs: change them
-# through the environment and the change is written to environment.txt, never silently.
+# JMH settings, pinned, and which cells get which. LIMITs below 1000000 run in the benchmark's AverageTime mode,
+# `-bm avgt -wi 1 -i 3 -r 5s -w 5s`. LIMITs of 1000000 and above run single-shot, `-bm ss -wi 3 -i 10`: a single
+# invocation there takes seconds and allocates about a gigabyte, so three 5 s iterations would hold one or two samples
+# each and the "average" would be a handful of operations. Both use `-f 1 -prof gc -rf json`. The two modes are
+# separate JMH invocations, hence separate output files: `<group>-avgt.json` and `<group>-ss.json`. Every JMH result
+# file records its own mode and iteration counts, and the START line of queue.log repeats them next to the file name.
+# The forked JVM gets -Xmx${JAVA_XMX} and -XX:+UseG1GC and nothing else (plus -Darm4.cpuTime=true when CPU_TIME=true).
+# Change those through the environment and the change lands in environment.txt, never silently.
+#
+# Reading single-shot results. Each iteration is exactly one invocation:
+#   * the score is that invocation's time in ms, averaged over the 10 measured iterations; the error term is a real
+#     spread across 10 independent operations, not over a count of operations inside a 5 s window;
+#   * gc.alloc.rate.norm is bytes allocated by that one invocation, which is what it always meant, and reads correctly;
+#     gc.alloc.rate (MB/s) is that invocation's allocation over its own duration; gc.count and gc.time are per iteration;
+#   * the aux counters reset every iteration, so segmentOps (and cpuOps) is 1 per iteration and 10 in the aggregate,
+#     and `segmentsProcessed / segmentOps` (or `cpuNanos / cpuOps`) is still the per-operation figure;
+#   * warmup is 3 single invocations plus the one setup probe, so the JIT is warm for the long loops but a first
+#     measured iteration can still carry some compilation -- look at the raw per-iteration values, not only the mean.
 #
 # Heap: JAVA_XMX defaults to 24g. The earlier v7 runs passed no -Xmx, which meant "the JVM default", and on this host
 # that is 24 GiB (`java -XX:+PrintFlagsFinal -version | grep MaxHeapSize` -> 25769803776, a quarter of the container
@@ -67,37 +88,65 @@
 #   ./mvnw -pl pinot-perf dependency:build-classpath -Dmdep.outputFile=/tmp/arm4-cp.txt \
 #       -Ddevelocity.cache.local.enabled=false
 # The build flag is not decoration: the Develocity cache can report BUILD SUCCESS having skipped the work, which for a
-# benchmark means running stale classes. The first run of a K builds that K's offline fixtures (three overlaps x 100
-# segments x 50,000 rows each, multi-gigabyte, cached under the temp directory); every later run reuses them.
+# benchmark means running stale classes. environment.txt warns when any source file is newer than the compiled
+# classes. The first run of a K builds that K's offline fixtures (three overlaps x 100 segments x 50,000 rows each,
+# multi-gigabyte, cached under the temp directory); every later run reuses them.
 #
 # Output, one directory per invocation: ${OUT_ROOT}/<scenario>[-bisect]-<UTC timestamp>/, or OUT_DIR if set.
-#   environment.txt   host, cores, memory, java -version, JVM's default MaxHeapSize, git HEAD, number of dirty paths,
-#                     JMH and JVM arguments, scenario
-#   queue.log         one START and one END line per group of cells, with exit status and seconds. A failing group does
-#                     not stop the queue; the script exits non-zero at the end if any group failed.
-#   <group>.json/.log JMH result and its console output (or, with --bisect, <group>-<orderBy>.csv/.log/-audit.csv)
-# A group is the cells that share one fixture (one K, one consumingRows value), so a failure costs one group.
+#   environment.txt   host, CPU model, cores, memory, CPU governor, cgroup limits, java -version, the JVM's default
+#                     MaxHeapSize, git HEAD, branch, number of dirty paths and (when dirty) a hash of `git diff HEAD`,
+#                     classes age against HEAD plus a staleness warning, JMH and JVM arguments, scenario, groups
+#   queue.log         one START and one END line per group of cells, with exit status and seconds, and the JMH settings
+#                     on the START line. A failing group does not stop the queue; the script exits non-zero at the end
+#                     if any group failed.
+#   JMH:    <group>-avgt.json/.log and <group>-ss.json/.log
+#   bisect: <group>-<orderBy>.csv (the result rows, from stdout), .log (stderr) and -audit.csv (every attempt)
+# A group is the cells that share one fixture (one K, one consumingRows value and shape), so a failure costs one group.
 #
 # Environment: JAVA_XMX (24g), CPU_TIME (false), OUT_ROOT (/tmp/arm4-scenarios), OUT_DIR, CP_FILE (/tmp/arm4-cp.txt),
-# CLASSES_DIR (<repo>/pinot-perf/target/classes). Further bisection knobs (REPLICATES, HIGH_MB, ...) pass through to
-# sorted-merge-bisect-xmx.sh unchanged; see its header.
+# CLASSES_DIR (<repo>/pinot-perf/target/classes). Further bisection knobs (REPLICATES, HIGH_MB, LOW_MB, ...) pass
+# through to sorted-merge-bisect-xmx.sh unchanged; see its header.
 #
 # Bisection. --bisect runs the bisection script once per (group, ORDER BY), over the group's overlaps and limits and
-# both modes, with ORDER_BY, KEY_CARDINALITY, CONSUMING_ROWS, LIMITS and OVERLAPS set to match. HIGH_MB defaults to
-# 4096 there, which suits 1000000-row results but not 2147483647, where 5,000,000 rows return and the answer is above
-# it; max-limit and consuming therefore default HIGH_MB to 16384. Cost is dominated by JVM launches: per cell roughly
-# REPLICATES x (2 range checks + ~7 bisection steps) x (REPEATS: 3 for OFF, 2 for ON), i.e. about 45 launches, each
-# paying the fixture's mmap load and, for consuming scenarios, a rebuild of the consuming segment (about 1.5 s for
-# 1,000,000 rows).
+# both modes, with ORDER_BY, KEY_CARDINALITY, CONSUMING_ROWS, CONSUMING_SHAPE, LIMITS and OVERLAPS set to match.
+#   * HIGH_MB defaults to 4096, which suits 1000000-row results but not 2147483647, where 5,000,000 rows return and the
+#     answer is above it; groups with that limit default HIGH_MB to 16384.
+#   * LOW_MB defaults to 64 and is raised for consuming groups, because the consuming segment's realtime inverted index
+#     lives on the heap and the fixture build itself must fit under the floor or the cell reports
+#     ERROR_FIXTURE_NOT_READY. Measured on this host, with K=1: the on-heap footprint after a System.gc() is 11.4 MiB for
+#     50,000 rows (any overlap), 212 MiB for 1,000,000 rows with TAIL, and 14.1 MiB for 1,000,000 rows with IN_DOMAIN;
+#     a 1,000,000-row TAIL segment fails to build in 192 MiB and builds in 256 MiB, while the others build in 64 MiB.
+#     The floors are therefore 64 (50,000 rows, both shapes), 384 (1,000,000 TAIL: 1.5x the smallest heap it built in)
+#     and 96 (1,000,000 IN_DOMAIN). A LOW_MB in the environment overrides them all.
+#   * Absolute minimum-heap numbers for consuming cells include that on-heap footprint. ON versus OFF at the same
+#     consumingRows and shape stays valid; comparing a consuming cell against a consumingRows=0 anchor needs the footprint
+#     above (it is logged on the `built consuming segment` line as `on-heap retained`) subtracted first.
+# Cost is dominated by JVM launches: per cell roughly REPLICATES x (2 range checks + ~7 bisection steps) x (REPEATS: 3 for
+# OFF, 2 for ON), about 36 to 54 launches, each paying the fixture's mmap load, the operation itself and, for consuming
+# groups, a rebuild of the consuming segment (about 1.5 s for 1,000,000 rows).
 #
-# Expected wall clock, JMH: each cell is one forked JVM with 1 warmup + 3 measured 5 s iterations, so 20 s of
-# measurement plus fork, fixture load and the setup probe -- the v7 grid took 23 to 46 s per cell. At 1000000 and
-# 2147483647 a single invocation takes seconds, so those cells sit at the top of that range or past it.
-# See the "Estimated cost" block below for per-scenario totals.
+# Estimated cost. Cells are counted from the definitions above. Per-operation times are from short calibration probes
+# on this host, FULL overlap, cold JVM, so upper bounds for a warm operation: LIMIT 1000 about 0.5 s on either arm;
+# 1000000 about 8 s OFF and 1.2 to 2 s ON; 2147483647 about 22 to 24 s OFF and 3 to 4 s ON; a consuming segment adds
+# little. JMH: an avgt cell is 23 to 46 s (the v7 grid); a single-shot cell is fork and setup (about 5 s) plus 14
+# operations (the setup probe, 3 warmup, 10 measured). Bisection: about 3 s per launch at LIMIT 1000, 10 s at 1000000
+# OFF (3 s ON), 26 s at 2147483647 OFF (6 s ON).
 #
-# Reading the results. A consuming cell's printed overlap depth is measured at the midpoint of the global key range, so
+#   scenario              cells  JMH wall clock         bisect wall clock
+#   anchors                 16   ~11 to 16 min          ~1 to 1.5 h
+#   max-limit               12   ~30 to 45 min          ~2.5 to 3.5 h
+#   low-k                   96   ~70 to 100 min         ~6 to 8 h
+#   consuming (TAIL)        72   ~105 to 120 min        ~8 to 10 h
+#   consuming (IN_DOMAIN)   24   ~35 to 40 min          ~2.5 to 3.5 h
+#   consuming (both)        96   ~2.4 h                 ~11 to 13 h
+#
+# These are planning figures good to perhaps +/-40%, and the bisection ones are the least certain: time one cell
+# (LIMITS, OVERLAPS and MODES narrowed to a single value) before queueing a whole scenario. The single-shot cells
+# dominate: the OFF arm at LIMIT 2147483647 alone is about five minutes of JMH per cell.
+#
+# Reading consuming results. A TAIL cell's printed overlap depth is measured at the midpoint of the global key range, so
 # once consumingRows is much larger than rowsPerSegment the consuming segment alone decides it (FULL and PARTIAL both
-# read 1 at 1000000). Label those cells by overlap and consumingRows, not by depth.
+# read 1 at 1000000). Label those cells by overlap, shape and consumingRows, not by depth. IN_DOMAIN reads 101.
 # ==============================================================================
 
 set -u -o pipefail
@@ -112,6 +161,9 @@ CPU_TIME="${CPU_TIME:-false}"
 OUT_ROOT="${OUT_ROOT:-/tmp/arm4-scenarios}"
 CP_FILE="${CP_FILE:-/tmp/arm4-cp.txt}"
 CLASSES_DIR="${CLASSES_DIR:-${REPO_ROOT}/pinot-perf/target/classes}"
+
+# LIMITs at or above this run single-shot; see the header.
+SS_MIN_LIMIT=1000000
 
 usage() {
   echo "Usage: $(basename "$0") <anchors|max-limit|low-k|consuming> [--bisect] [--dry-run]" >&2
@@ -138,41 +190,28 @@ ALL_OVERLAPS="DISJOINT,PARTIAL,FULL"
 ORDER_BYS="TS_VAL,TS_ONLY"
 MODES="OFF,ON"
 
-# One group per fixture: "label|overlaps|keyCardinality|consumingRows|limits", comma-separated lists.
+# One group per fixture: "label|overlaps|keyCardinality|consumingRows|limits|consumingShape|lowMb", comma-separated lists.
+# lowMb is empty where the bisection script's default floor applies; see the header for the consuming values.
 GROUPS_DEF=()
 case "${SCENARIO}" in
   anchors)
-    GROUPS_DEF+=("anchors|FULL,PARTIAL|1|0|1000,1000000")
+    GROUPS_DEF+=("anchors|FULL,PARTIAL|1|0|1000,1000000|TAIL|")
     ;;
   max-limit)
-    GROUPS_DEF+=("max-limit|${ALL_OVERLAPS}|1|0|2147483647")
+    GROUPS_DEF+=("max-limit|${ALL_OVERLAPS}|1|0|2147483647|TAIL|")
     ;;
   low-k)
     for k in 1 100 10000 50000; do
-      GROUPS_DEF+=("low-k-k${k}|${ALL_OVERLAPS}|${k}|0|1000,1000000")
+      GROUPS_DEF+=("low-k-k${k}|${ALL_OVERLAPS}|${k}|0|1000,1000000|TAIL|")
     done
     ;;
   consuming)
-    for c in 50000 1000000; do
-      GROUPS_DEF+=("consuming-c${c}|${ALL_OVERLAPS}|1|${c}|1000,1000000,2147483647")
-    done
+    GROUPS_DEF+=("consuming-c50000|${ALL_OVERLAPS}|1|50000|1000,1000000,2147483647|TAIL|64")
+    GROUPS_DEF+=("consuming-c1000000|${ALL_OVERLAPS}|1|1000000|1000,1000000,2147483647|TAIL|384")
+    GROUPS_DEF+=("consuming-indomain-c50000|FULL|1|50000|1000,1000000,2147483647|IN_DOMAIN|64")
+    GROUPS_DEF+=("consuming-indomain-c1000000|FULL|1|1000000|1000,1000000,2147483647|IN_DOMAIN|96")
     ;;
 esac
-
-# Estimated cost -- cells counted from the definitions above; per-cell time from the v7 grid (23 to 46 s per JMH cell,
-# about 4 to 5 s per bisection launch) plus the timings seen running the correctness gate on these same cells: a
-# 1,000,000-row consuming segment builds in about 1.5 s, fixtures load in under a second, and a full 5,000,000-row
-# result takes a few seconds. These are planning figures, not measurements of this build.
-#
-#   scenario    cells   JMH wall clock                        bisect wall clock (3 to 5 min per cell)
-#   anchors       16    ~6 to 12 min                          ~1 to 1.5 h
-#   max-limit     12    ~6 to 12 min                          ~1 to 2 h
-#   low-k         96    ~40 to 75 min, plus ~30 s per        ~5 to 8 h
-#                       offline fixture not yet on disk
-#   consuming     72    ~30 to 60 min                         ~4 to 6 h
-#
-# The bisection figures are the least certain numbers here: time one cell (LIMITS, OVERLAPS and MODES narrowed to a
-# single value) before queueing a whole scenario.
 
 if [[ "${DO_BISECT}" == true ]]; then
   RUN_KIND="${SCENARIO}-bisect"
@@ -186,7 +225,9 @@ JVM_ARGS="-Xmx${JAVA_XMX} -XX:+UseG1GC"
 if [[ "${CPU_TIME}" == "true" ]]; then
   JVM_ARGS="${JVM_ARGS} -Darm4.cpuTime=true"
 fi
-JMH_ARGS=(-f 1 -wi 1 -i 3 -r 5s -w 5s -prof gc -rf json)
+JMH_COMMON=(-f 1 -prof gc -rf json)
+JMH_AVGT=(-bm avgt -wi 1 -i 3 -r 5s -w 5s)
+JMH_SS=(-bm ss -wi 3 -i 10)
 
 if ! [[ "${JAVA_XMX}" =~ ^[1-9][0-9]*[mMgG]$ ]]; then
   echo "JAVA_XMX must look like 24g or 24576m, got '${JAVA_XMX}'" >&2
@@ -204,73 +245,158 @@ CP="${CLASSES_DIR}:$(cat "${CP_FILE}")"
 
 mkdir -p "${OUT_DIR}" || exit 1
 
+# First readable value among the given files, or "unavailable".
+first_readable() {
+  local f
+  for f in "$@"; do
+    if [[ -r "${f}" ]]; then
+      tr '\n' ' ' <"${f}"
+      return
+    fi
+  done
+  echo "unavailable"
+}
+
+# The compiled classes must not be older than the sources they claim to be: a benchmark run from stale classes
+# measures code nobody is reading. Newest class file against any Java source in pinot-perf modified after it.
+newest_class="$(find "${CLASSES_DIR}" -name '*.class' -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1)"
+newest_class_path="${newest_class#* }"
+newest_class_time="$(date -u -d "@${newest_class%% *}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
+stale_sources=""
+if [[ -n "${newest_class_path}" ]]; then
+  stale_sources="$(find "${REPO_ROOT}/pinot-perf/src/main/java" -name '*.java' -newer "${newest_class_path}" | head -5)"
+fi
+git_dirty_lines="$(git -C "${REPO_ROOT}" status --porcelain | wc -l)"
+
 {
   echo "scenario: ${SCENARIO}"
   echo "mode: $([[ "${DO_BISECT}" == true ]] && echo bisect || echo jmh)"
   echo "started_utc: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "host: $(hostname)"
+  echo "cpu_model: $(lscpu 2>/dev/null | awk -F: '/Model name/ {gsub(/^ +/, "", $2); print $2; exit}')"
   echo "cores: $(nproc)"
+  echo "cpu_scaling_governor: $(first_readable /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor)"
   echo "memory: $(free -g | awk 'NR==2 {print $2 " GiB total, " $7 " GiB available"}')"
+  echo "cgroup_memory_limit: $(first_readable /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory/memory.limit_in_bytes)"
+  echo "cgroup_cpu_limit: $(first_readable /sys/fs/cgroup/cpu.max /sys/fs/cgroup/cpu/cpu.cfs_quota_us)"
   echo "java: $(java -version 2>&1 | tr '\n' ' ')"
   echo "jvm_default_max_heap: $(java -XX:+PrintFlagsFinal -version 2>/dev/null | awk '/ MaxHeapSize / {print $4 " bytes"}')"
   echo "git_head: $(git -C "${REPO_ROOT}" rev-parse HEAD)"
+  echo "git_head_commit_time: $(git -C "${REPO_ROOT}" log -1 --format=%cI)"
   echo "git_branch: $(git -C "${REPO_ROOT}" rev-parse --abbrev-ref HEAD)"
-  echo "git_status_lines: $(git -C "${REPO_ROOT}" status --porcelain | wc -l)"
+  echo "git_status_lines: ${git_dirty_lines}"
+  if [[ "${git_dirty_lines}" -ne 0 ]]; then
+    echo "git_diff_head_sha256: $(git -C "${REPO_ROOT}" diff HEAD | sha256sum | cut -c1-16) (tracked changes only;" \
+      "untracked files are counted in git_status_lines but not hashed)"
+  fi
   echo "classes_dir: ${CLASSES_DIR}"
+  echo "classes_newest_file_time: ${newest_class_time}"
+  if [[ -n "${stale_sources}" ]]; then
+    echo "WARNING_stale_classes: these sources are newer than the newest compiled class, so the results may not be of" \
+      "this code: $(tr '\n' ' ' <<<"${stale_sources}")"
+  else
+    echo "stale_classes_check: no pinot-perf source is newer than the newest compiled class"
+  fi
   echo "forked_jvm_args: ${JVM_ARGS}"
-  echo "jmh_args: ${JMH_ARGS[*]} -jvmArgs \"${JVM_ARGS}\""
+  echo "jmh_common: ${JMH_COMMON[*]}"
+  echo "jmh_avgt (limits < ${SS_MIN_LIMIT}): ${JMH_AVGT[*]}"
+  echo "jmh_ss (limits >= ${SS_MIN_LIMIT}): ${JMH_SS[*]}"
   echo "groups: ${#GROUPS_DEF[@]}"
   printf 'group: %s\n' "${GROUPS_DEF[@]}"
 } >"${OUT_DIR}/environment.txt"
 
+if [[ -n "${stale_sources}" ]]; then
+  echo "WARNING: pinot-perf sources are newer than the compiled classes in ${CLASSES_DIR}; rebuild first." >&2
+fi
 echo "scenario ${SCENARIO} -> ${OUT_DIR}" >&2
 
 FAILED_GROUPS=0
 
-# Runs one command as one queue entry: logged on both sides, never allowed to stop the queue. Output goes to the
-# given log. With --dry-run it only prints what it would do.
+# Runs one command as one queue entry: logged on both sides, never allowed to stop the queue. `desc` is free text for
+# the START line (the settings the entry used). Stdout goes to `out` and stderr to `err`; the same file for both merges
+# them. With --dry-run it only prints what it would do.
 queue_run() {
-  local label="$1" log="$2"
-  shift 2
+  local label="$1" out="$2" err="$3" desc="$4"
+  shift 4
   if [[ "${DRY_RUN}" == true ]]; then
-    printf 'DRY-RUN %s:' "${label}"
+    printf 'DRY-RUN %s [%s] stdout=%s stderr=%s:' "${label}" "${desc}" "${out##*/}" "${err##*/}"
     printf ' %q' "$@"
     printf '\n'
     return 0
   fi
   local started=${SECONDS} status
-  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) START ${label}" >>"${QUEUE_LOG}"
-  "$@" >"${log}" 2>&1
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) START ${label} ${desc} -> ${out##*/}" >>"${QUEUE_LOG}"
+  if [[ "${out}" == "${err}" ]]; then
+    "$@" >"${out}" 2>&1
+  else
+    "$@" >"${out}" 2>"${err}"
+  fi
   status=$?
-  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) END   ${label} exit=${status} elapsed=$((SECONDS - started))s" \
-    >>"${QUEUE_LOG}"
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) END   ${label} exit=${status} elapsed=$((SECONDS - started))s" >>"${QUEUE_LOG}"
   if [[ ${status} -ne 0 ]]; then
     FAILED_GROUPS=$((FAILED_GROUPS + 1))
   fi
 }
 
+# Splits a comma-separated limit list into the ones that run AverageTime and the ones that run single-shot.
+split_limits() {
+  local limits="$1" limit
+  AVGT_LIMITS=""
+  SS_LIMITS=""
+  IFS=',' read -r -a limit_list <<<"${limits}"
+  for limit in "${limit_list[@]}"; do
+    if (( limit >= SS_MIN_LIMIT )); then
+      SS_LIMITS+="${SS_LIMITS:+,}${limit}"
+    else
+      AVGT_LIMITS+="${AVGT_LIMITS:+,}${limit}"
+    fi
+  done
+}
+
+# One JMH invocation over one group's cells at one set of mode settings. `suffix` is avgt or ss.
+jmh_run() {
+  local label="$1" suffix="$2" limits="$3" overlaps="$4" key_cardinality="$5" consuming_rows="$6" shape="$7"
+  shift 7
+  queue_run "${label}-${suffix}" "${OUT_DIR}/${label}-${suffix}.log" "${OUT_DIR}/${label}-${suffix}.log" \
+    "jmh $* ${JMH_COMMON[*]} limits=${limits}" \
+    java -cp "${CP}" org.openjdk.jmh.Main "${BENCHMARK_CLASS}" "${JMH_COMMON[@]}" "$@" \
+    -rff "${OUT_DIR}/${label}-${suffix}.json" -jvmArgs "${JVM_ARGS}" \
+    -p "_overlap=${overlaps}" -p "_orderBy=${ORDER_BYS}" -p "_mode=${MODES}" -p "_limit=${limits}" \
+    -p "_keyCardinality=${key_cardinality}" -p "_consumingRows=${consuming_rows}" -p "_consumingShape=${shape}"
+}
+
 for group in "${GROUPS_DEF[@]}"; do
-  IFS='|' read -r label overlaps key_cardinality consuming_rows limits <<<"${group}"
+  IFS='|' read -r label overlaps key_cardinality consuming_rows limits shape low_mb <<<"${group}"
 
   if [[ "${DO_BISECT}" == true ]]; then
     high_mb="${HIGH_MB:-4096}"
     if [[ "${limits}" == *2147483647* ]]; then
       high_mb="${HIGH_MB:-16384}"
     fi
+    # The group's floor unless the caller set one; empty means the bisection script's own default.
+    group_low_mb="${LOW_MB:-${low_mb}}"
     IFS=',' read -r -a order_by_list <<<"${ORDER_BYS}"
     for order_by in "${order_by_list[@]}"; do
-      queue_run "${label}-${order_by}" "${OUT_DIR}/${label}-${order_by}.log" \
-        env ORDER_BY="${order_by}" KEY_CARDINALITY="${key_cardinality}" CONSUMING_ROWS="${consuming_rows}" \
-        LIMITS="${limits//,/ }" OVERLAPS="${overlaps//,/ }" MODES="${MODES//,/ }" HIGH_MB="${high_mb}" \
-        AUDIT_LOG="${OUT_DIR}/${label}-${order_by}-audit.csv" CLASSES_DIR="${CLASSES_DIR}" \
-        bash "${BISECT_SCRIPT}" "${CP_FILE}"
+      env_args=(ORDER_BY="${order_by}" KEY_CARDINALITY="${key_cardinality}" CONSUMING_ROWS="${consuming_rows}"
+        CONSUMING_SHAPE="${shape}" LIMITS="${limits//,/ }" OVERLAPS="${overlaps//,/ }" MODES="${MODES//,/ }"
+        HIGH_MB="${high_mb}" AUDIT_LOG="${OUT_DIR}/${label}-${order_by}-audit.csv" CLASSES_DIR="${CLASSES_DIR}")
+      if [[ -n "${group_low_mb}" ]]; then
+        env_args+=(LOW_MB="${group_low_mb}")
+      fi
+      # The CSV is the bisection script's stdout and its progress and errors are stderr, so they must not share a file.
+      queue_run "${label}-${order_by}" "${OUT_DIR}/${label}-${order_by}.csv" "${OUT_DIR}/${label}-${order_by}.log" \
+        "bisect ${env_args[*]}" env "${env_args[@]}" bash "${BISECT_SCRIPT}" "${CP_FILE}"
     done
   else
-    queue_run "${label}" "${OUT_DIR}/${label}.log" \
-      java -cp "${CP}" org.openjdk.jmh.Main "${BENCHMARK_CLASS}" "${JMH_ARGS[@]}" -rff "${OUT_DIR}/${label}.json" \
-      -jvmArgs "${JVM_ARGS}" \
-      -p "_overlap=${overlaps}" -p "_orderBy=${ORDER_BYS}" -p "_mode=${MODES}" -p "_limit=${limits}" \
-      -p "_keyCardinality=${key_cardinality}" -p "_consumingRows=${consuming_rows}"
+    split_limits "${limits}"
+    if [[ -n "${AVGT_LIMITS}" ]]; then
+      jmh_run "${label}" avgt "${AVGT_LIMITS}" "${overlaps}" "${key_cardinality}" "${consuming_rows}" "${shape}" \
+        "${JMH_AVGT[@]}"
+    fi
+    if [[ -n "${SS_LIMITS}" ]]; then
+      jmh_run "${label}" ss "${SS_LIMITS}" "${overlaps}" "${key_cardinality}" "${consuming_rows}" "${shape}" \
+        "${JMH_SS[@]}"
+    fi
   fi
 done
 
