@@ -43,6 +43,9 @@
 #              tail-to-sort path's per-run heap hold more than one row.                  96 cells (24 per K).
 #   consuming  One mutable off-heap consuming segment is added after the 100 offline ones; K=1; LIMIT 1000, 1000000 and
 #              2147483647. Under ON its leaf is a full scan plus top-K, and the combine never prunes it.
+#                (IN_DOMAIN at consumingRows 50000 is NOT a new design point: j * rowsPerSegment / consumingRows is j, so
+#                 it holds exactly the data of TAIL c50000 FULL and is a same-build replicate of those cells. Only
+#                 consumingRows 1000000 differs between the shapes. The group stays so the replicate is on record.)
 #                TAIL (consuming tail beyond offline keys), consumingRows 50000 and 1000000, all three overlaps:
 #                  72 cells. The consuming keys run past (or, at 50000, sit inside) the offline keys, so at a small
 #                  LIMIT the segment is scanned in full but adds nothing to the result.
@@ -73,7 +76,12 @@
 #   * the aux counters reset every iteration, so segmentOps (and cpuOps) is 1 per iteration and 10 in the aggregate,
 #     and `segmentsProcessed / segmentOps` (or `cpuNanos / cpuOps`) is still the per-operation figure;
 #   * warmup is 3 single invocations plus the one setup probe, so the JIT is warm for the long loops but a first
-#     measured iteration can still carry some compilation -- look at the raw per-iteration values, not only the mean.
+#     measured iteration can still carry some compilation -- look at the raw per-iteration values, not only the mean;
+#   * with a 24g heap the garbage one invocation leaves is often collected during a LATER invocation, so gc.time,
+#     gc.count and even a single iteration's wall time can be charged to the wrong operation. Read the median and the
+#     raw per-iteration values and gc.time over all 10 iterations, not just the mean of the score;
+#   * these cells are not comparable with earlier AverageTime runs: LIMIT 1000000 ran under AverageTime in v7 and now
+#     runs single-shot, so a difference across that change may be the mode, not the code.
 #
 # Heap: JAVA_XMX defaults to 24g. The earlier v7 runs passed no -Xmx, which meant "the JVM default", and on this host
 # that is 24 GiB (`java -XX:+PrintFlagsFinal -version | grep MaxHeapSize` -> 25769803776, a quarter of the container
@@ -95,7 +103,10 @@
 # Output, one directory per invocation: ${OUT_ROOT}/<scenario>[-bisect]-<UTC timestamp>/, or OUT_DIR if set.
 #   environment.txt   host, CPU model, cores, memory, CPU governor, cgroup limits, java -version, the JVM's default
 #                     MaxHeapSize, git HEAD, branch, number of dirty paths and (when dirty) a hash of `git diff HEAD`,
-#                     classes age against HEAD plus a staleness warning, JMH and JVM arguments, scenario, groups
+#                     classes age against HEAD plus a staleness warning, the path, mtime and sha256 of the pinot-core and
+#                     pinot-segment-local jars on the classpath (the operators under test live there, not in pinot-perf)
+#                     with a warning when a source under those modules is newer than the jar or a probe class differs
+#                     from the module's target/classes, JMH and JVM arguments, scenario, groups
 #   queue.log         one START and one END line per group of cells, with exit status and seconds, and the JMH settings
 #                     on the START line. A failing group does not stop the queue; the script exits non-zero at the end
 #                     if any group failed.
@@ -113,11 +124,26 @@
 #     answer is above it; groups with that limit default HIGH_MB to 16384.
 #   * LOW_MB defaults to 64 and is raised for consuming groups, because the consuming segment's realtime inverted index
 #     lives on the heap and the fixture build itself must fit under the floor or the cell reports
-#     ERROR_FIXTURE_NOT_READY. Measured on this host, with K=1: the on-heap footprint after a System.gc() is 11.4 MiB for
-#     50,000 rows (any overlap), 212 MiB for 1,000,000 rows with TAIL, and 14.1 MiB for 1,000,000 rows with IN_DOMAIN;
-#     a 1,000,000-row TAIL segment fails to build in 192 MiB and builds in 256 MiB, while the others build in 64 MiB.
-#     The floors are therefore 64 (50,000 rows, both shapes), 384 (1,000,000 TAIL: 1.5x the smallest heap it built in)
-#     and 96 (1,000,000 IN_DOMAIN). A LOW_MB in the environment overrides them all.
+#     ERROR_FIXTURE_NOT_READY. Measured on this host, with K=1, there are two different numbers and the floor follows
+#     the second one, not the first:
+#       - the RETAINED on-heap footprint after a System.gc() (logged as `on-heap retained`): 11.4 MiB for 50,000 rows (any
+#         overlap), 212 MiB for 1,000,000 rows with TAIL, 14.1 MiB for 1,000,000 rows with IN_DOMAIN;
+#       - the PEAK heap the build needs, which is what decides whether it fits under -Xmx and is larger than the retained
+#         figure by whatever garbage the build produces on the way. Probed with single `run` launches at -Xms=-Xmx:
+#         1,000,000 TAIL fails to build in 192 MiB and builds in 256 MiB; 1,000,000 IN_DOMAIN built in 64 MiB in 6 of 6
+#         launches (3 ON, 3 OFF) and did not get as far as the build line in 32 or 48 MiB (2 launches each), so its build
+#         floor is in (48, 64] MiB; 50,000 rows IN_DOMAIN printed its build line in 64 MiB in 3 of 3 launches.
+#     The floors are therefore 64 (50,000 rows, both shapes; and 1,000,000 IN_DOMAIN, which sits right on the build floor
+#     with no margin, so an ERROR_FIXTURE_NOT_READY row from that group means raise LOW_MB to 80 and rerun it, it is not a
+#     result) and 384 (1,000,000 TAIL: 1.5x the smallest heap it built in). A LOW_MB in the environment overrides all.
+#   * The operator, not the build, sets ON's minimum at small limits. At LIMIT 1000 with FULL overlap, ON failed in the
+#     operator at 64 MiB with a 50,000-row and with a 1,000,000-row IN_DOMAIN segment (3 of 3 each, after the build line
+#     had printed) and survived at 72, 80 and 96 MiB (3 of 3 each); OFF survived at 64 MiB. The ON-versus-OFF
+#     difference at small limits is therefore a few MiB, near the floor, which is why the floor's resolution matters.
+#   * Resolution caveat for consuming-c1000000 (TAIL), floor 384. At small limits both arms probably survive at 384 MiB
+#     and report AT_OR_BELOW_LOW, which hides ON-versus-OFF heap differences of the size seen above. In that group only
+#     the cells whose answer is above 384 MiB (the large limits) carry an ON-versus-OFF comparison; for the small-limit
+#     cells the group says only "fits in 384 MiB". Lowering the floor is not possible without losing the build itself.
 #   * Absolute minimum-heap numbers for consuming cells include that on-heap footprint. ON versus OFF at the same
 #     consumingRows and shape stays valid; comparing a consuming cell against a consumingRows=0 anchor needs the footprint
 #     above (it is logged on the `built consuming segment` line as `on-heap retained`) subtracted first.
@@ -209,7 +235,7 @@ case "${SCENARIO}" in
     GROUPS_DEF+=("consuming-c50000|${ALL_OVERLAPS}|1|50000|1000,1000000,2147483647|TAIL|64")
     GROUPS_DEF+=("consuming-c1000000|${ALL_OVERLAPS}|1|1000000|1000,1000000,2147483647|TAIL|384")
     GROUPS_DEF+=("consuming-indomain-c50000|FULL|1|50000|1000,1000000,2147483647|IN_DOMAIN|64")
-    GROUPS_DEF+=("consuming-indomain-c1000000|FULL|1|1000000|1000,1000000,2147483647|IN_DOMAIN|96")
+    GROUPS_DEF+=("consuming-indomain-c1000000|FULL|1|1000000|1000,1000000,2147483647|IN_DOMAIN|64")
     ;;
 esac
 
@@ -268,6 +294,47 @@ if [[ -n "${newest_class_path}" ]]; then
 fi
 git_dirty_lines="$(git -C "${REPO_ROOT}" status --porcelain | wc -l)"
 
+# The operators under test are not in pinot-perf: they live in pinot-core and pinot-segment-local and are reached
+# through the jars on CP_FILE (normally ~/.m2), so a fresh pinot-perf can still be measuring an old operator. For each
+# of those modules this records the jar's path, file mtime and sha256, and runs two staleness checks:
+#   1. a source file under <module>/src/main/java newer than the jar FILE's mtime. The file mtime, never the entry
+#      times inside the jar: Pinot builds reproducibly, so every entry is stamped from the HEAD commit time and says
+#      nothing about when the jar was built;
+#   2. one representative class from the jar compared byte for byte with <module>/target/classes, which is where
+#      `install` took the jar's contents from. This is the sturdier check (it does not depend on filesystem times) but
+#      only works when the module has been built in this checkout; otherwise it reports "not compared".
+# Neither can prove the jar matches HEAD; the sha256 is recorded so that two runs can at least be told apart.
+jar_report=()
+jar_warnings=()
+check_operator_jar() {
+  local module="$1" probe_class="$2" jar newer jar_time cmp_result
+  jar="$(tr ':' '\n' <"${CP_FILE}" | grep -E "/${module}-[^/]*\.jar$" | grep -v -- '-tests\.jar$' | head -1)"
+  if [[ -z "${jar}" || ! -f "${jar}" ]]; then
+    jar_warnings+=("${module}: no jar on the classpath in ${CP_FILE}, so this run may not be using the operator code in the checkout")
+    return
+  fi
+  jar_time="$(date -u -r "${jar}" +%Y-%m-%dT%H:%M:%SZ)"
+  jar_report+=("${module}_jar: ${jar} mtime=${jar_time} sha256=$(sha256sum "${jar}" | cut -d' ' -f1)")
+  newer="$(find "${REPO_ROOT}/${module}/src/main/java" -name '*.java' -newer "${jar}" 2>/dev/null | head -3 | tr '\n' ' ')"
+  if [[ -n "${newer}" ]]; then
+    jar_warnings+=("${module}: sources newer than ${jar} (${jar_time}): ${newer}")
+  fi
+  local built="${REPO_ROOT}/${module}/target/classes/${probe_class}"
+  if [[ -f "${built}" ]]; then
+    if unzip -p "${jar}" "${probe_class}" 2>/dev/null | cmp -s - "${built}"; then
+      cmp_result="${probe_class##*/} in the jar is identical to ${module}/target/classes"
+    else
+      cmp_result="DIFFERS"
+      jar_warnings+=("${module}: ${probe_class##*/} in ${jar} differs from ${module}/target/classes; reinstall the module")
+    fi
+  else
+    cmp_result="not compared (${module}/target/classes/${probe_class} does not exist)"
+  fi
+  jar_report+=("${module}_jar_class_check: ${cmp_result}")
+}
+check_operator_jar pinot-core org/apache/pinot/core/operator/combine/StreamingSelectionOrderByCombineOperator.class
+check_operator_jar pinot-segment-local org/apache/pinot/segment/local/indexsegment/mutable/MutableSegmentImpl.class
+
 {
   echo "scenario: ${SCENARIO}"
   echo "mode: $([[ "${DO_BISECT}" == true ]] && echo bisect || echo jmh)"
@@ -297,6 +364,12 @@ git_dirty_lines="$(git -C "${REPO_ROOT}" status --porcelain | wc -l)"
   else
     echo "stale_classes_check: no pinot-perf source is newer than the newest compiled class"
   fi
+  printf '%s\n' "${jar_report[@]}"
+  if [[ ${#jar_warnings[@]} -gt 0 ]]; then
+    printf 'WARNING_stale_operator_jar: %s\n' "${jar_warnings[@]}"
+  else
+    echo "operator_jar_check: no pinot-core or pinot-segment-local source is newer than its jar, and the probe classes match"
+  fi
   echo "forked_jvm_args: ${JVM_ARGS}"
   echo "jmh_common: ${JMH_COMMON[*]}"
   echo "jmh_avgt (limits < ${SS_MIN_LIMIT}): ${JMH_AVGT[*]}"
@@ -307,6 +380,9 @@ git_dirty_lines="$(git -C "${REPO_ROOT}" status --porcelain | wc -l)"
 
 if [[ -n "${stale_sources}" ]]; then
   echo "WARNING: pinot-perf sources are newer than the compiled classes in ${CLASSES_DIR}; rebuild first." >&2
+fi
+if [[ ${#jar_warnings[@]} -gt 0 ]]; then
+  printf 'WARNING: operator jar check: %s\n' "${jar_warnings[@]}" >&2
 fi
 echo "scenario ${SCENARIO} -> ${OUT_DIR}" >&2
 

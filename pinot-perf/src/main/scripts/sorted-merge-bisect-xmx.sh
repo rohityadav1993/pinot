@@ -58,7 +58,12 @@
 # -IN_DOMAIN, in that order), and it appends order_by, key_cardinality, consuming_rows and consuming_shape columns to
 # the output CSV. NOTE this applies to *any one* of them: KEY_CARDINALITY=100 on its own, which used to produce the
 # original eight columns and an unsuffixed audit-log name, now produces twelve columns and a `-k100` name. Only a run
-# with every axis at its default keeps the original names and columns. The on-disk offline fixture already keys on K
+# with every axis at its default keeps the original names and columns.
+#
+# Compatibility with earlier output: against commit 2ec8714d70, which added the first three axes, output with any
+# non-default axis went from 11 columns (eight plus order_by, key_cardinality, consuming_rows) to 12 (consuming_shape
+# added). A consuming CSV written before CONSUMING_SHAPE existed therefore does not line up with a current one; every
+# such row is TAIL, so add a trailing `TAIL` column to it before concatenating or joining. The on-disk offline fixture already keys on K
 # (see SortedMergeFixture#cacheKey); the consuming segment has no on-disk form at all, because it is built off-heap in
 # each JVM, so it needs no name. Cost to budget for: every attempt at a CONSUMING_ROWS > 0 cell rebuilds it before the
 # merge starts (the probe logs the time), and such a cell is only classified as an operator result once that build
