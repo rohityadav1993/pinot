@@ -30,6 +30,7 @@ import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
@@ -145,6 +146,11 @@ import org.apache.pinot.spi.utils.builder.TableConfigBuilder;
 /// extra rows come after every offline row in sort order. Zero rows builds no such segment and leaves every existing
 /// cache key, fixture and result unchanged.
 ///
+/// <p>That placement is the {@link ConsumingShape#TAIL} shape ("consuming tail beyond offline keys"), the default.
+/// {@link ConsumingShape#IN_DOMAIN} ("consuming keys rescaled into the offline key domain", FULL only) instead spreads
+/// the consuming rows over the offline key range so they compete in the merge rather than trailing it; its cache key
+/// carries an `_in_domain` suffix and the TAIL key is unchanged.
+///
 /// <p>The consuming segment is deliberately *not* cached on disk. It is built in this JVM, off-heap, with the
 /// {@link MmapMemoryManager} that `RealtimeSegmentDataManager` selects by default (`realtime.alloc.offheap=true`), in a
 /// temporary directory that is deleted by {@link #destroyAll()}. A mutable segment has no on-disk form to reuse, so
@@ -238,6 +244,23 @@ public final class SortedMergeFixture {
     FULL
   }
 
+  /// Where the consuming segment's keys sit relative to the offline segments' key domain. Only meaningful when
+  /// `consumingRows > 0`.
+  public enum ConsumingShape {
+    /// "Consuming tail beyond offline keys": the default, and the only shape before this axis existed. The consuming
+    /// rows use the same formula as an offline segment at index `numSegments`, so with more rows than a segment they
+    /// run past the end of the offline keys (see the placement table in the class javadoc). The consuming segment then
+    /// mostly holds the largest keys, which a small-LIMIT query never reaches.
+    TAIL,
+    /// "Consuming keys rescaled into the offline key domain": the consuming rows are spread evenly over the keys
+    /// `[0, rowsPerSegment)` that every FULL offline segment covers (`tsSource = j * rowsPerSegment / consumingRows`,
+    /// then divided by K as usual), so they interleave with the offline rows and actually compete for the LIMIT.
+    /// FULL only: DISJOINT and PARTIAL have no single domain to rescale into, and are rejected. Where
+    /// `consumingRows > rowsPerSegment` several consuming rows share a key even at K=1, which ties on `tsCol` but
+    /// not on `valCol`, so `TS_VAL` remains a total order.
+    IN_DOMAIN
+  }
+
   /// System property pointing the on-disk fixture at a different directory. For tests only -- see [#baseDir()].
   @VisibleForTesting
   static final String BASE_DIR_PROPERTY = "arm4.fixture.dir";
@@ -310,13 +333,20 @@ public final class SortedMergeFixture {
   /// may keep it, but must not destroy any element: both halves are released by [#destroyAll()].
   public static List<IndexSegment> segments(Overlap overlap, int numSegments, int rowsPerSegment, int keyCardinality,
       int consumingRows) {
+    return segments(overlap, numSegments, rowsPerSegment, keyCardinality, consumingRows, ConsumingShape.TAIL);
+  }
+
+  /// As [#segments(Overlap, int, int, int, int)], with the consuming segment's key placement chosen by `shape`; see
+  /// [ConsumingShape]. `shape` is ignored when `consumingRows == 0`.
+  public static List<IndexSegment> segments(Overlap overlap, int numSegments, int rowsPerSegment, int keyCardinality,
+      int consumingRows, ConsumingShape shape) {
     List<IndexSegment> offline = segments(overlap, numSegments, rowsPerSegment, keyCardinality);
     if (consumingRows == 0) {
       return offline;
     }
-    String key = consumingKey(overlap, numSegments, rowsPerSegment, keyCardinality, consumingRows);
+    String key = consumingKey(overlap, numSegments, rowsPerSegment, keyCardinality, consumingRows, shape);
     ConsumingSegment consuming = CONSUMING_CACHE.computeIfAbsent(key,
-        k -> buildConsuming(overlap, numSegments, rowsPerSegment, keyCardinality, consumingRows, k));
+        k -> buildConsuming(overlap, numSegments, rowsPerSegment, keyCardinality, consumingRows, shape, k));
     List<IndexSegment> all = new ArrayList<>(offline.size() + 1);
     all.addAll(offline);
     all.add(consuming._segment);
@@ -337,21 +367,32 @@ public final class SortedMergeFixture {
   /// consuming cell by it.
   public static int measuredDepth(Overlap overlap, int numSegments, int rowsPerSegment, int keyCardinality,
       int consumingRows) {
+    return measuredDepth(overlap, numSegments, rowsPerSegment, keyCardinality, consumingRows, ConsumingShape.TAIL);
+  }
+
+  /// As [#measuredDepth(Overlap, int, int, int, int)] for a given [ConsumingShape]. Under `IN_DOMAIN` the consuming
+  /// segment spans exactly the offline key range, so the midpoint is inside all of them whatever `consumingRows` is:
+  /// FULL reads `numSegments + 1` (101 by default), which is the figure that is meaningful at 1_000_000 rows where
+  /// `TAIL` is not.
+  public static int measuredDepth(Overlap overlap, int numSegments, int rowsPerSegment, int keyCardinality,
+      int consumingRows, ConsumingShape shape) {
     if (consumingRows == 0) {
       return measuredDepth(overlap, numSegments, rowsPerSegment, keyCardinality);
     }
-    segments(overlap, numSegments, rowsPerSegment, keyCardinality, consumingRows);
-    Integer depth =
-        DEPTH_CACHE.get(consumingKey(overlap, numSegments, rowsPerSegment, keyCardinality, consumingRows));
+    segments(overlap, numSegments, rowsPerSegment, keyCardinality, consumingRows, shape);
+    Integer depth = DEPTH_CACHE.get(
+        consumingKey(overlap, numSegments, rowsPerSegment, keyCardinality, consumingRows, shape));
     if (depth == null) {
       throw new IllegalStateException("No measured depth recorded for " + overlap + " with a consuming segment");
     }
     return depth;
   }
 
+  /// `TAIL` keeps the pre-shape key, so nothing keyed before the shape existed changes; any other shape is suffixed.
   private static String consumingKey(Overlap overlap, int numSegments, int rowsPerSegment, int keyCardinality,
-      int consumingRows) {
-    return cacheKey(overlap, numSegments, rowsPerSegment, keyCardinality) + "_consuming" + consumingRows;
+      int consumingRows, ConsumingShape shape) {
+    String key = cacheKey(overlap, numSegments, rowsPerSegment, keyCardinality) + "_consuming" + consumingRows;
+    return shape == ConsumingShape.TAIL ? key : key + "_" + shape.name().toLowerCase(Locale.ROOT);
   }
 
   /// As [#measuredDepth(Overlap, int, int, int)] with [#DEFAULT_KEY_CARDINALITY].
@@ -599,7 +640,7 @@ public final class SortedMergeFixture {
     List<GenericRow> records = new ArrayList<>(rowsPerSegment);
     for (int j = 0; j < rowsPerSegment; j++) {
       GenericRow record = new GenericRow();
-      fillRow(record, base, segmentIndex, rowsPerSegment, j, keyCardinality);
+      fillRow(record, base + j, segmentIndex, rowsPerSegment, j, keyCardinality);
       records.add(record);
     }
     return records;
@@ -628,9 +669,12 @@ public final class SortedMergeFixture {
   /// of the {@link #VAL_COL} range `[segmentIndex * rowsPerSegment, ...)`. A consuming segment with a different row
   /// count therefore sits exactly where an `R`-row segment at that index would, and its `valCol` cannot collide with
   /// an offline segment's.
-  private static void fillRow(GenericRow record, long base, int segmentIndex, int rowsPerSegment, int j,
+  ///
+  /// <p>`tsSource` is the {@link #TS_COL} value before dividing by K: `base + j` for every offline row, and for a
+  /// consuming row whatever its {@link ConsumingShape} says.
+  private static void fillRow(GenericRow record, long tsSource, int segmentIndex, int rowsPerSegment, int j,
       int keyCardinality) {
-    record.putValue(TS_COL, (base + j) / keyCardinality);
+    record.putValue(TS_COL, tsSource / keyCardinality);
     record.putValue(VAL_COL, segmentIndex * rowsPerSegment + j);
     record.putValue(PAYLOAD_COL, PAYLOAD_FILLER + "_" + segmentIndex + "_" + j);
   }
@@ -643,9 +687,15 @@ public final class SortedMergeFixture {
   /// nothing about its leaf or its indexes is a harness artifact. The capacity is exact because the row count is known
   /// up front; a production segment is sized by the flush threshold, which is the same number.
   private static ConsumingSegment buildConsuming(Overlap overlap, int numSegments, int rowsPerSegment,
-      int keyCardinality, int consumingRows, String key) {
+      int keyCardinality, int consumingRows, ConsumingShape shape, String key) {
     if (consumingRows < 0) {
       throw new IllegalArgumentException("consumingRows must be >= 0, got " + consumingRows + " for " + key);
+    }
+    if (shape == ConsumingShape.IN_DOMAIN && overlap != Overlap.FULL) {
+      // Rescaling into "the offline key domain" is only well defined when every offline segment shares one domain.
+      // For DISJOINT and PARTIAL the domains differ per segment and there is no single range to spread over.
+      throw new IllegalArgumentException(
+          "consumingShape IN_DOMAIN is defined for overlap FULL only, got " + overlap + " (" + key + ")");
     }
     // valCol is an INT column. The consuming segment's values run up to numSegments * rowsPerSegment + consumingRows.
     if ((long) numSegments * rowsPerSegment + consumingRows > Integer.MAX_VALUE) {
@@ -683,7 +733,12 @@ public final class SortedMergeFixture {
       GenericRow row = new GenericRow();
       for (int j = 0; j < consumingRows; j++) {
         row.clear();
-        fillRow(row, base, numSegments, rowsPerSegment, j, keyCardinality);
+        // IN_DOMAIN spreads the consuming rows evenly over the offline segments' key range [base, base + R), so they
+        // interleave with the offline rows instead of trailing them. Non-decreasing in j, and equal to base + j when
+        // consumingRows == rowsPerSegment.
+        long tsSource =
+            shape == ConsumingShape.IN_DOMAIN ? base + (long) j * rowsPerSegment / consumingRows : base + j;
+        fillRow(row, tsSource, numSegments, rowsPerSegment, j, keyCardinality);
         segment.index(row, null);
       }
       if (segment.getNumDocsIndexed() != consumingRows) {

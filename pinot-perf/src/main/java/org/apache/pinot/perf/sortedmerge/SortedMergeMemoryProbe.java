@@ -26,6 +26,7 @@ import java.util.concurrent.ExecutorService;
 import javax.annotation.Nullable;
 import org.apache.pinot.perf.sortedmerge.SortedMergeDriver.OrderBy;
 import org.apache.pinot.perf.sortedmerge.SortedMergeDriver.Result;
+import org.apache.pinot.perf.sortedmerge.SortedMergeFixture.ConsumingShape;
 import org.apache.pinot.segment.spi.IndexSegment;
 import org.apache.pinot.spi.utils.CommonConstants.Server.SortedSelectionMergeMode;
 
@@ -112,14 +113,16 @@ public final class SortedMergeMemoryProbe {
     System.err.println("Usage:");
     System.err.println(
         "  gate [numSegments] [rowsPerSegment] [blockSize] [maxExecutionThreads] [orderBy] [keyCardinality] "
-            + "[consumingRows]");
+            + "[consumingRows] [consumingShape]");
     System.err.println("  run <overlap> <mode> <limit> [numSegments] [rowsPerSegment] [blockSize] "
-        + "[maxExecutionThreads] [orderBy] [keyCardinality] [consumingRows]");
+        + "[maxExecutionThreads] [orderBy] [keyCardinality] [consumingRows] [consumingShape]");
     System.err.println("  orderBy is one of " + Arrays.toString(OrderBy.values())
         + ", default " + OrderBy.TS_VAL + " (kept for CLI backward compatibility).");
     System.err.println("  keyCardinality defaults to " + SortedMergeFixture.DEFAULT_KEY_CARDINALITY
         + " (kept for CLI backward compatibility).");
     System.err.println("  consumingRows defaults to 0: no consuming segment (kept for CLI backward compatibility).");
+    System.err.println("  consumingShape is one of " + Arrays.toString(ConsumingShape.values()) + ", default "
+        + ConsumingShape.TAIL + "; IN_DOMAIN is FULL-only, so `gate` then covers FULL alone.");
   }
 
   /// Step 3, guard G2. Returns 0 if every configuration agrees across the two arms.
@@ -150,6 +153,7 @@ public final class SortedMergeMemoryProbe {
     OrderBy orderBy = orderByArg(args, 5);
     int keyCardinality = intArg(args, 6, SortedMergeFixture.DEFAULT_KEY_CARDINALITY);
     int consumingRows = intArg(args, 7, 0);
+    ConsumingShape consumingShape = consumingShapeArg(args, 8);
 
     ExecutorService executorService = SortedMergeDriver.newBoundedExecutor(maxExecutionThreads);
     List<String> failures = new ArrayList<>();
@@ -157,11 +161,14 @@ public final class SortedMergeMemoryProbe {
     boolean strict = orderBy == OrderBy.TS_VAL;
     long totalRows = (long) numSegments * rowsPerSegment + consumingRows;
     try {
-      for (SortedMergeFixture.Overlap overlap : SortedMergeFixture.Overlap.values()) {
-        List<IndexSegment> segments =
-            SortedMergeFixture.segments(overlap, numSegments, rowsPerSegment, keyCardinality, consumingRows);
-        int depth =
-            SortedMergeFixture.measuredDepth(overlap, numSegments, rowsPerSegment, keyCardinality, consumingRows);
+      // IN_DOMAIN rescales into the one key domain FULL's offline segments share, so it has no meaning for the others.
+      SortedMergeFixture.Overlap[] overlaps = consumingRows > 0 && consumingShape == ConsumingShape.IN_DOMAIN
+          ? new SortedMergeFixture.Overlap[]{SortedMergeFixture.Overlap.FULL} : SortedMergeFixture.Overlap.values();
+      for (SortedMergeFixture.Overlap overlap : overlaps) {
+        List<IndexSegment> segments = SortedMergeFixture.segments(overlap, numSegments, rowsPerSegment,
+            keyCardinality, consumingRows, consumingShape);
+        int depth = SortedMergeFixture.measuredDepth(overlap, numSegments, rowsPerSegment, keyCardinality,
+            consumingRows, consumingShape);
         for (int limit : GATE_LIMITS) {
           boolean collectRows = retainsRows(limit);
           SortedMergeDriver.Result off =
@@ -175,7 +182,8 @@ public final class SortedMergeMemoryProbe {
           // consumingRows is printed only when there is a consuming segment, so a gate line for the offline-only
           // fixture reads exactly as it always has.
           String config = overlap + " depth=" + depth + " limit=" + limit + " keyCardinality=" + keyCardinality
-              + (consumingRows > 0 ? " consumingRows=" + consumingRows : "");
+              + (consumingRows > 0 ? " consumingRows=" + consumingRows : "")
+              + (consumingRows > 0 && consumingShape != ConsumingShape.TAIL ? " consumingShape=" + consumingShape : "");
           boolean wholeTable = returnedWholeTable(off, totalRows);
           String failureReason = cellVerdict(off, on, orderBy, collectRows, totalRows);
           if (failureReason != null) {
@@ -319,20 +327,22 @@ public final class SortedMergeMemoryProbe {
     OrderBy orderBy = orderByArg(args, 8);
     int keyCardinality = intArg(args, 9, SortedMergeFixture.DEFAULT_KEY_CARDINALITY);
     int consumingRows = intArg(args, 10, 0);
+    ConsumingShape consumingShape = consumingShapeArg(args, 11);
 
     ExecutorService executorService = SortedMergeDriver.newBoundedExecutor(maxExecutionThreads);
     try {
       List<IndexSegment> segments =
-          SortedMergeFixture.segments(overlap, numSegments, rowsPerSegment, keyCardinality, consumingRows);
+          SortedMergeFixture.segments(overlap, numSegments, rowsPerSegment, keyCardinality, consumingRows,
+              consumingShape);
       long startNs = System.nanoTime();
       SortedMergeDriver.Result result =
           SortedMergeDriver.run(
               SortedMergeDriver.prepare(segments, limit, mode, blockSize, maxExecutionThreads, orderBy),
               executorService, false, false);
       System.out.printf(
-          "OK overlap=%s mode=%s limit=%d orderBy=%s keyCardinality=%d consumingRows=%d rows=%d blocks=%d "
-              + "elapsedMs=%d maxHeapMb=%d numTasks=%d segmentsProcessed=%d%n", overlap, mode, limit, orderBy,
-          keyCardinality, consumingRows, result._numRows, result._numBlocks,
+          "OK overlap=%s mode=%s limit=%d orderBy=%s keyCardinality=%d consumingRows=%d consumingShape=%s rows=%d "
+              + "blocks=%d elapsedMs=%d maxHeapMb=%d numTasks=%d segmentsProcessed=%d%n", overlap, mode, limit,
+          orderBy, keyCardinality, consumingRows, consumingShape, result._numRows, result._numBlocks,
           (System.nanoTime() - startNs) / 1_000_000,
           Runtime.getRuntime().maxMemory() >> 20, result._numTasks, result._numSegmentsProcessed);
       return 0;
@@ -347,6 +357,10 @@ public final class SortedMergeMemoryProbe {
 
   /// Parses the trailing `orderBy` CLI argument, defaulting to [OrderBy#TS_VAL] when absent so every invocation
   /// written before this parameter existed keeps meaning the shape it always meant.
+  private static ConsumingShape consumingShapeArg(String[] args, int index) {
+    return args.length > index ? ConsumingShape.valueOf(args[index]) : ConsumingShape.TAIL;
+  }
+
   private static OrderBy orderByArg(String[] args, int index) {
     return args.length > index ? OrderBy.valueOf(args[index]) : OrderBy.TS_VAL;
   }
