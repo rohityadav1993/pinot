@@ -72,11 +72,14 @@ import org.openjdk.jmh.runner.options.OptionsBuilder;
 /// anchors    _keyCardinality=1      _limit=1000,1000000  _overlap=FULL,PARTIAL
 /// max-limit  _keyCardinality=1      _limit=2147483647
 /// low-k      _keyCardinality=1,100,10000,50000          _limit=1000,1000000
-/// consuming  _consumingRows=50000,1000000  _limit=1000,1000000,2147483647
+/// consuming  _consumingRows=50000,1000000  _limit=1000,1000000,2147483647   (_consumingShape=TAIL, all overlaps;
+///            and _consumingShape=IN_DOMAIN with _overlap=FULL only)
 /// ```
 ///
-/// <p>All four sweep `_mode` and `_orderBy` fully. `sorted-merge-scenarios.sh <scenario> --bisect` runs the matching
-/// cells through `sorted-merge-bisect-xmx.sh` for minimum surviving heap instead.
+/// <p>All four sweep `_mode` and `_orderBy` fully. Limits of 1_000_000 and above are run single-shot (`-bm ss -wi 3
+/// -i 10`) in separate JMH invocations from the small limits, which keep this class's AverageTime settings.
+/// `sorted-merge-scenarios.sh <scenario> --bisect` runs the matching cells through `sorted-merge-bisect-xmx.sh` for
+/// minimum surviving heap instead.
 ///
 /// <p>Hypothesis, with `L = limit + offset`, `D` = overlap depth and `W` = concurrent combine tasks: `ON` retains
 /// `D * min(L, MAX_DOC_PER_CALL)` plus a `blockSize` output buffer, while `OFF` retains roughly
@@ -107,7 +110,9 @@ public class BenchmarkSortedMergeMemoryCrossover {
   /// The default grid stops at 1_000_000. The scenarios in `sorted-merge-scenarios.sh` pick subsets of it (1000 and
   /// 1000000) and add `2147483647`, i.e. `Integer.MAX_VALUE`, the widest LIMIT the SQL layer accepts with offset 0.
   /// Nothing prunes at that value and every row the table holds is returned, so it is not part of the default grid:
-  /// a single invocation returns 5_000_000 rows.
+  /// a single invocation returns 5_000_000 rows, plus `_consumingRows` more (so 5_050_000 or 6_000_000 in the
+  /// `consuming` scenario). `sorted-merge-scenarios.sh` runs limits of 1_000_000 and above single-shot (`-bm ss`)
+  /// rather than AverageTime, because one invocation takes seconds.
   @Param({"10", "100", "1000", "10000", "100000", "1000000"})
   private int _limit;
 
@@ -223,6 +228,12 @@ public class BenchmarkSortedMergeMemoryCrossover {
   /// How many segments the combine actually processed per invocation, reported as secondary metrics next to the
   /// wall-clock score so the per-operation figure lands in the JMH JSON rather than only in the `[arm4] setup:` log
   /// line, which records a single probe run taken before measurement starts.
+  ///
+  /// <p>The value comes from `BaseResultsBlock#getNumSegmentsMatched()`, i.e. the operators whose segment scanned at
+  /// least one document, not from `getNumSegmentsProcessed()` (which counts every operator, pruned or not). For this
+  /// fixture the two meanings coincide once pruning is accounted for: the query has no filter, so every operator that
+  /// runs scans documents and is "matched", and a pruned segment's operator never runs. The figure is therefore the
+  /// number of segments actually processed; see [SortedMergeDriver.Result#_numSegmentsProcessed].
   ///
   /// <p>That distinction matters for the `OFF` arm. `MinMaxValueBasedSelectionOrderByCombineOperator` prunes by
   /// min/max against tasks that are already dispatched, so how many segments it touches varies from invocation to
