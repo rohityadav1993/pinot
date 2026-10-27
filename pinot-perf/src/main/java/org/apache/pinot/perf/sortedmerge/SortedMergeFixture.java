@@ -26,8 +26,19 @@ import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.channels.OverlappingFileLockException;
+import java.nio.file.DirectoryStream;
+import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.PosixFileAttributes;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
+import java.nio.file.attribute.UserPrincipal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -269,7 +280,8 @@ public final class SortedMergeFixture {
   private static final Map<String, Integer> DEPTH_CACHE = new ConcurrentHashMap<>();
   /// In-JVM only, keyed like [#SEGMENT_CACHE] plus a `_consuming<N>` suffix. Never persisted: see the class javadoc.
   private static final Map<String, ConsumingSegment> CONSUMING_CACHE = new ConcurrentHashMap<>();
-  /// Prefix of every consuming segment's temporary directory; the owning pid follows it.
+  /// Name prefix of the private per-user parent that holds every consuming segment's directory; the user name follows
+  /// it. Inside the parent a directory is named `<pid>-<random>`.
   private static final String CONSUMING_DIR_PREFIX = "pinot-arm4-consuming-";
 
   /// A built consuming segment together with what has to be released with it: the off-heap memory manager is closed
@@ -285,7 +297,7 @@ public final class SortedMergeFixture {
 
     void destroy() {
       _segment.destroy();
-      FileUtils.deleteQuietly(_dir);
+      deleteTreeNoFollow(_dir.toPath());
     }
   }
 
@@ -703,14 +715,15 @@ public final class SortedMergeFixture {
           "valCol would overflow INT with " + numSegments + " x " + rowsPerSegment + " offline rows plus "
               + consumingRows + " consuming rows (" + key + ")");
     }
-    sweepAbandonedConsumingDirs();
+    Path parent = consumingParentDir();
+    sweepAbandonedConsumingDirs(parent);
     long startNs = System.nanoTime();
     long heapBefore = usedHeapAfterGc();
     File dir;
     try {
       // The pid is in the name so a later JVM can tell whether the owner is still alive; see
       // sweepAbandonedConsumingDirs.
-      dir = Files.createTempDirectory(CONSUMING_DIR_PREFIX + ProcessHandle.current().pid() + "-").toFile();
+      dir = Files.createTempDirectory(parent, ProcessHandle.current().pid() + "-").toFile();
     } catch (IOException e) {
       throw new RuntimeException("Failed to create a directory for the consuming segment " + key, e);
     }
@@ -769,47 +782,143 @@ public final class SortedMergeFixture {
         } catch (Throwable ignored) {
           // Best effort; the directory is removed regardless.
         }
-        FileUtils.deleteQuietly(dir);
+        deleteTreeNoFollow(dir.toPath());
       }
     }
   }
 
   /// Heap in use after a full collection. Only meaningful as a difference between two calls in one thread of one JVM,
   /// and only approximately so: other threads may be allocating.
+  ///
+  /// <p>Three caveats on the figure this feeds. It measures what the segment keeps *retained* after a collection, not
+  /// the *peak* heap the build needed; the peak is higher and is what sets the smallest `-Xmx` the build survives.
+  /// On the first build in a JVM it also includes about 1 MiB of one-off static and class-initialisation heap that
+  /// belongs to no segment. And it is meaningless under `-XX:+DisableExplicitGC`, where `System.gc()` does nothing and
+  /// the delta then contains garbage.
   private static long usedHeapAfterGc() {
     System.gc();
     Runtime runtime = Runtime.getRuntime();
     return runtime.totalMemory() - runtime.freeMemory();
   }
 
-  /// Deletes consuming-segment directories left behind by JVMs that died without cleaning up -- the OOM-killed
-  /// attempts of a bisection, since `-XX:+ExitOnOutOfMemoryError` skips shutdown hooks. A directory is named
-  /// `pinot-arm4-consuming-<pid>-<random>` and is only deleted when no process with that pid is alive, so a concurrent
-  /// JVM's live segment is never touched. A recycled pid just means a stale directory is kept until the next sweep.
-  private static void sweepAbandonedConsumingDirs() {
-    File[] entries = FileUtils.getTempDirectory().listFiles();
-    if (entries == null) {
-      return;
+  /// The private per-user parent of every consuming segment directory:
+  /// `${java.io.tmpdir}/pinot-arm4-consuming-<user.name>/`. A world-writable tmpdir without the sticky bit lets another
+  /// user plant a symlink where this process expects a directory, so the parent is created `0700` and, when it already
+  /// exists, must be a real directory (not a symlink), owned by this user and not group- or world-writable.
+  /// Anything else is refused rather than reused.
+  private static Path consumingParentDir() {
+    try {
+      return ensurePrivateDir(FileUtils.getTempDirectory().toPath(),
+          CONSUMING_DIR_PREFIX + System.getProperty("user.name", "unknown").replaceAll("[^A-Za-z0-9_.-]", "_"));
+    } catch (IOException e) {
+      throw new RuntimeException("Cannot use a private directory for consuming segments under "
+          + FileUtils.getTempDirectory() + ": " + e.getMessage(), e);
     }
-    for (File entry : entries) {
-      String name = entry.getName();
-      if (!entry.isDirectory() || !name.startsWith(CONSUMING_DIR_PREFIX)) {
-        continue;
+  }
+
+  /// Creates `root/name` with `0700` permissions, or verifies an existing one without following symlinks. On a
+  /// filesystem without POSIX attributes only the real-directory check applies.
+  @VisibleForTesting
+  static Path ensurePrivateDir(Path root, String name)
+      throws IOException {
+    Path dir = root.resolve(name);
+    boolean posix = root.getFileSystem().supportedFileAttributeViews().contains("posix");
+    try {
+      if (posix) {
+        Files.createDirectory(dir, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")));
+      } else {
+        Files.createDirectory(dir);
       }
-      String rest = name.substring(CONSUMING_DIR_PREFIX.length());
-      int dash = rest.indexOf('-');
-      if (dash <= 0) {
-        continue;
+      return dir;
+    } catch (FileAlreadyExistsException e) {
+      // Fall through to verify what is there.
+    }
+    BasicFileAttributes attributes = Files.readAttributes(dir, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+    if (!attributes.isDirectory() || attributes.isSymbolicLink()) {
+      throw new IOException(dir + " exists and is not a real directory (symlink or file); refusing to use it");
+    }
+    if (posix) {
+      PosixFileAttributes posixAttributes =
+          Files.readAttributes(dir, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+      UserPrincipal self = root.getFileSystem().getUserPrincipalLookupService()
+          .lookupPrincipalByName(System.getProperty("user.name"));
+      if (!posixAttributes.owner().equals(self)) {
+        throw new IOException(dir + " is owned by " + posixAttributes.owner().getName() + ", not " + self.getName()
+            + "; refusing to use it");
       }
-      try {
-        long pid = Long.parseLong(rest.substring(0, dash));
-        if (ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false)) {
+      if (posixAttributes.permissions().contains(PosixFilePermission.GROUP_WRITE) || posixAttributes.permissions()
+          .contains(PosixFilePermission.OTHERS_WRITE)) {
+        throw new IOException(dir + " is group- or world-writable (" + PosixFilePermissions.toString(
+            posixAttributes.permissions()) + "); refusing to use it");
+      }
+    }
+    return dir;
+  }
+
+  /// Deletes `path` and everything under it without ever following a symlink: a link is deleted as a link and its
+  /// target is left alone. Best effort, like the `deleteQuietly` it replaces.
+  @VisibleForTesting
+  static void deleteTreeNoFollow(Path path) {
+    try {
+      // No FOLLOW_LINKS option: a symlink, even to a directory, is reported to visitFile and deleted as a file.
+      Files.walkFileTree(path, new SimpleFileVisitor<>() {
+        @Override
+        public FileVisitResult visitFile(Path file, BasicFileAttributes attributes)
+            throws IOException {
+          Files.delete(file);
+          return FileVisitResult.CONTINUE;
+        }
+
+        @Override
+        public FileVisitResult postVisitDirectory(Path dir, IOException exception)
+            throws IOException {
+          if (exception != null) {
+            throw exception;
+          }
+          Files.delete(dir);
+          return FileVisitResult.CONTINUE;
+        }
+      });
+    } catch (IOException | RuntimeException ignored) {
+      // Best effort.
+    }
+  }
+
+  /// Deletes consuming-segment directories left behind by JVMs that died without cleaning up -- the OOM-killed
+  /// attempts of a bisection, since `-XX:+ExitOnOutOfMemoryError` skips shutdown hooks. Looks only inside `parent`,
+  /// the private per-user directory. An entry is named `<pid>-<random>` and is deleted only when it is a real directory
+  /// (a symlink is skipped, never followed) and no process with that pid is alive, so a concurrent JVM's live segment
+  /// is never touched. A recycled pid just means a stale directory is kept until the next sweep.
+  @VisibleForTesting
+  static void sweepAbandonedConsumingDirs(Path parent) {
+    try (DirectoryStream<Path> entries = Files.newDirectoryStream(parent)) {
+      for (Path entry : entries) {
+        BasicFileAttributes attributes;
+        try {
+          attributes = Files.readAttributes(entry, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        } catch (IOException e) {
           continue;
         }
-      } catch (NumberFormatException e) {
-        continue;
+        if (!attributes.isDirectory() || attributes.isSymbolicLink()) {
+          continue;
+        }
+        String name = entry.getFileName().toString();
+        int dash = name.indexOf('-');
+        if (dash <= 0) {
+          continue;
+        }
+        try {
+          long pid = Long.parseLong(name.substring(0, dash));
+          if (ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false)) {
+            continue;
+          }
+        } catch (NumberFormatException e) {
+          continue;
+        }
+        deleteTreeNoFollow(entry);
       }
-      FileUtils.deleteQuietly(entry);
+    } catch (IOException ignored) {
+      // Nothing to sweep, or unreadable.
     }
   }
 

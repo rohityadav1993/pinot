@@ -23,7 +23,10 @@ import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.List;
 import org.apache.commons.io.FileUtils;
 import org.apache.pinot.perf.sortedmerge.SortedMergeFixture.ConsumingShape;
@@ -31,6 +34,7 @@ import org.apache.pinot.perf.sortedmerge.SortedMergeFixture.Overlap;
 import org.apache.pinot.segment.local.indexsegment.mutable.MutableSegmentImpl;
 import org.apache.pinot.segment.spi.IndexSegment;
 import org.apache.pinot.segment.spi.datasource.DataSourceMetadata;
+import org.testng.SkipException;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
@@ -197,20 +201,90 @@ public class SortedMergeFixtureTest {
   }
 
   @Test
-  public void buildingAConsumingSegmentSweepsDeadOwnersDirectoriesAndNeverLiveOnes()
+  public void sweepDeletesDeadOwnersDirectoriesAndNeverLiveOnes()
       throws IOException {
     // A directory whose owning pid no longer exists is what an OOM-killed bisection attempt leaves behind. One owned by
     // this very (live) process stands in for a concurrent JVM's segment, which must survive the sweep.
-    File dead = Files.createTempDirectory("pinot-arm4-consuming-999999999-").toFile();
-    File live = Files.createTempDirectory("pinot-arm4-consuming-" + ProcessHandle.current().pid() + "-").toFile();
+    Path parent = Files.createTempDirectory("arm4-sweep-test-");
     try {
-      SortedMergeFixture.segments(Overlap.FULL, 2, 50, 1, 10);
-      assertFalse(dead.exists(), "a directory whose owner is gone must be swept");
-      assertTrue(live.isDirectory(), "a live owner's directory must never be swept");
+      Path dead = Files.createDirectory(parent.resolve("999999999-x"));
+      Files.writeString(dead.resolve("f"), "x");
+      Path live = Files.createDirectory(parent.resolve(ProcessHandle.current().pid() + "-x"));
+      SortedMergeFixture.sweepAbandonedConsumingDirs(parent);
+      assertFalse(Files.exists(dead), "a directory whose owner is gone must be swept");
+      assertTrue(Files.isDirectory(live), "a live owner's directory must never be swept");
     } finally {
-      SortedMergeFixture.purgeAll();
-      FileUtils.deleteQuietly(dead);
-      FileUtils.deleteQuietly(live);
+      FileUtils.deleteQuietly(parent.toFile());
+    }
+  }
+
+  @Test
+  public void sweepNeverFollowsASymlinkOutOfTheParent()
+      throws IOException {
+    Path parent = Files.createTempDirectory("arm4-sweep-test-");
+    Path victim = Files.createTempDirectory("arm4-sweep-victim-");
+    try {
+      Path precious = Files.writeString(victim.resolve("precious"), "keep me");
+      Path link = parent.resolve("999999999-link");
+      try {
+        Files.createSymbolicLink(link, victim);
+      } catch (UnsupportedOperationException | IOException e) {
+        throw new SkipException("symlinks are not supported here: " + e);
+      }
+      SortedMergeFixture.sweepAbandonedConsumingDirs(parent);
+      assertTrue(Files.isSymbolicLink(link), "a symlinked entry must be skipped, not deleted");
+      assertTrue(Files.exists(precious), "the target's contents must survive the sweep");
+    } finally {
+      // Deleted without following the link, so the victim is cleaned up explicitly below.
+      SortedMergeFixture.deleteTreeNoFollow(parent);
+      FileUtils.deleteQuietly(victim.toFile());
+    }
+  }
+
+  @Test
+  public void deleteTreeRemovesALinkInsideATreeAsALinkAndLeavesItsTarget()
+      throws IOException {
+    Path tree = Files.createTempDirectory("arm4-delete-test-");
+    Path victim = Files.createTempDirectory("arm4-delete-victim-");
+    try {
+      Path precious = Files.writeString(victim.resolve("precious"), "keep me");
+      Files.writeString(tree.resolve("own"), "x");
+      try {
+        Files.createSymbolicLink(tree.resolve("link"), victim);
+      } catch (UnsupportedOperationException | IOException e) {
+        throw new SkipException("symlinks are not supported here: " + e);
+      }
+      SortedMergeFixture.deleteTreeNoFollow(tree);
+      assertFalse(Files.exists(tree, LinkOption.NOFOLLOW_LINKS), "the tree itself must be gone");
+      assertTrue(Files.exists(precious), "a link in the tree must be deleted as a link");
+    } finally {
+      SortedMergeFixture.deleteTreeNoFollow(tree);
+      FileUtils.deleteQuietly(victim.toFile());
+    }
+  }
+
+  @Test
+  public void privateDirIsCreatedOwnerOnlyAndAnUnsafeExistingOneIsRefused()
+      throws IOException {
+    Path root = Files.createTempDirectory("arm4-private-test-");
+    try {
+      Path dir = SortedMergeFixture.ensurePrivateDir(root, "p");
+      assertEquals(SortedMergeFixture.ensurePrivateDir(root, "p"), dir, "an existing safe directory is reused");
+      if (!root.getFileSystem().supportedFileAttributeViews().contains("posix")) {
+        throw new SkipException("not a POSIX filesystem");
+      }
+      assertEquals(PosixFilePermissions.toString(Files.getPosixFilePermissions(dir)), "rwx------");
+      Files.setPosixFilePermissions(dir, PosixFilePermissions.fromString("rwxrwx---"));
+      assertThrows(IOException.class, () -> SortedMergeFixture.ensurePrivateDir(root, "p"));
+      Path target = Files.createDirectory(root.resolve("target"));
+      try {
+        Files.createSymbolicLink(root.resolve("l"), target);
+      } catch (UnsupportedOperationException | IOException e) {
+        throw new SkipException("symlinks are not supported here: " + e);
+      }
+      assertThrows(IOException.class, () -> SortedMergeFixture.ensurePrivateDir(root, "l"));
+    } finally {
+      SortedMergeFixture.deleteTreeNoFollow(root);
     }
   }
 
