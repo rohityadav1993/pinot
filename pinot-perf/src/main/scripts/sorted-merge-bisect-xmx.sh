@@ -49,14 +49,31 @@
 #   ORDER_BY          TS_VAL | TS_ONLY                           default TS_VAL
 #   KEY_CARDINALITY   K, rows sharing one tsCol value            default 1
 #   CONSUMING_ROWS    rows in the extra consuming segment        default 0 (none)
+#   CONSUMING_SHAPE   TAIL | IN_DOMAIN                           default TAIL
+#                     TAIL: consuming keys run past the offline keys. IN_DOMAIN: consuming keys are rescaled into the
+#                     offline key range so they compete in the merge; FULL only, so set OVERLAPS=FULL with it.
 #
-# A non-default ORDER_BY, KEY_CARDINALITY or CONSUMING_ROWS does two things so results from different axes cannot be
-# mistaken for one another: it suffixes the default audit-log name (-TS_ONLY, -k100, -c1000000, in that order), and it
-# appends order_by, key_cardinality and consuming_rows columns to the output CSV. The on-disk offline fixture already
-# keys on K (see SortedMergeFixture#cacheKey); the consuming segment has no on-disk form at all, because it is built
-# off-heap in each JVM, so it needs no name. Cost to budget for: that means every attempt at a CONSUMING_ROWS > 0 cell
-# rebuilds it before the merge starts (the probe logs the time), and such a cell is only classified as an operator
-# result once that build has finished -- see fixture_ready below.
+# A non-default ORDER_BY, KEY_CARDINALITY, CONSUMING_ROWS or CONSUMING_SHAPE does two things so results from different
+# axes cannot be mistaken for one another: it suffixes the default audit-log name (-TS_ONLY, -k100, -c1000000,
+# -IN_DOMAIN, in that order), and it appends order_by, key_cardinality, consuming_rows and consuming_shape columns to
+# the output CSV. NOTE this applies to *any one* of them: KEY_CARDINALITY=100 on its own, which used to produce the
+# original eight columns and an unsuffixed audit-log name, now produces twelve columns and a `-k100` name. Only a run
+# with every axis at its default keeps the original names and columns. The on-disk offline fixture already keys on K
+# (see SortedMergeFixture#cacheKey); the consuming segment has no on-disk form at all, because it is built off-heap in
+# each JVM, so it needs no name. Cost to budget for: every attempt at a CONSUMING_ROWS > 0 cell rebuilds it before the
+# merge starts (the probe logs the time), and such a cell is only classified as an operator result once that build
+# has finished -- see fixture_ready below.
+#
+# Reading consuming-segment heap numbers. The realtime inverted index on tsCol keeps one bitmap per distinct key on the
+# *heap*, so a consuming segment has an on-heap cost of its own: about 11 MiB at 50,000 rows and about 212 MiB at
+# 1,000,000 rows with the TAIL shape and K=1 (measured; IN_DOMAIN, with only 50,000 distinct keys, retains about
+# 14 MiB at 1,000,000 rows). The probe logs it on the `built consuming segment` line as `on-heap retained`. Consequences:
+#   * a minimum surviving heap for a consuming cell includes that figure;
+#   * ON versus OFF at the same CONSUMING_ROWS and CONSUMING_SHAPE is unaffected, since both carry the same fixture;
+#   * comparing a consuming cell with a CONSUMING_ROWS=0 cell needs the logged figure subtracted first;
+#   * LOW_MB must sit comfortably above it, or the floor attempt dies inside the fixture build. A 1,000,000-row TAIL
+#     segment does not build in 192 MiB and does in 256 MiB, so the default LOW_MB=64 would report every such cell as
+#     ERROR_FIXTURE_NOT_READY. sorted-merge-scenarios.sh sets LOW_MB per group for this reason.
 # ==============================================================================
 
 set -u -o pipefail
@@ -98,6 +115,9 @@ ORDER_BY="${ORDER_BY:-TS_VAL}"
 # Rows in the optional consuming (mutable, off-heap) segment appended after the offline ones. 0 means none, which is
 # also the probe's default, so at 0 no argument is passed at all -- see PROBE_TAIL.
 CONSUMING_ROWS="${CONSUMING_ROWS:-0}"
+# Where the consuming segment's keys sit; see SortedMergeFixture.ConsumingShape. TAIL is the probe's default, so it is
+# only passed when it is IN_DOMAIN.
+CONSUMING_SHAPE="${CONSUMING_SHAPE:-TAIL}"
 
 # How many consecutive runs must survive a heap size before it counts as surviving.
 #
@@ -151,6 +171,7 @@ AXES_SUFFIX=""
 if [[ "${ORDER_BY}" != "TS_VAL" ]]; then AXES_SUFFIX+="-${ORDER_BY}"; fi
 if [[ "${KEY_CARDINALITY}" != "1" ]]; then AXES_SUFFIX+="-k${KEY_CARDINALITY}"; fi
 if [[ "${CONSUMING_ROWS}" != "0" ]]; then AXES_SUFFIX+="-c${CONSUMING_ROWS}"; fi
+if [[ "${CONSUMING_SHAPE}" != "TAIL" ]]; then AXES_SUFFIX+="-${CONSUMING_SHAPE}"; fi
 AUDIT_LOG="${AUDIT_LOG:-/tmp/arm4-bisect-audit${AXES_SUFFIX}-$(date +%Y%m%dT%H%M%S).csv}"
 
 # TOLERANCE_MB was this script's tolerance knob until the relative tolerance above replaced it. Silently ignoring a
@@ -184,6 +205,22 @@ if ! [[ "${CONSUMING_ROWS}" =~ ^(0|[1-9][0-9]*)$ ]]; then
   echo "CONSUMING_ROWS must be a non-negative integer, got '${CONSUMING_ROWS}'" >&2
   exit 1
 fi
+case "${CONSUMING_SHAPE}" in
+  TAIL) ;;
+  IN_DOMAIN)
+    # The fixture rejects IN_DOMAIN for any overlap but FULL, and with no consuming segment the shape means nothing.
+    # Refuse here instead of letting every attempt of every cell die as a probe failure.
+    if (( CONSUMING_ROWS == 0 )) || [[ "${OVERLAPS[*]}" != "FULL" ]]; then
+      echo "CONSUMING_SHAPE=IN_DOMAIN needs CONSUMING_ROWS > 0 and OVERLAPS=FULL, got CONSUMING_ROWS=${CONSUMING_ROWS}" \
+          "OVERLAPS='${OVERLAPS[*]}'" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "CONSUMING_SHAPE must be TAIL or IN_DOMAIN, got '${CONSUMING_SHAPE}'" >&2
+    exit 1
+    ;;
+esac
 # A LIMIT past INT_MAX would not parse in the SQL layer, and the probe would fail it as a plain harness error on every
 # attempt of the cell; refuse it up front instead.
 for limit in "${LIMITS[@]}"; do
@@ -247,6 +284,9 @@ JVM_FLAGS=(-XX:+UseG1GC -XX:+ExitOnOutOfMemoryError)
 PROBE_TAIL=("${ORDER_BY}" "${KEY_CARDINALITY}")
 if (( CONSUMING_ROWS > 0 )); then
   PROBE_TAIL+=("${CONSUMING_ROWS}")
+  if [[ "${CONSUMING_SHAPE}" != "TAIL" ]]; then
+    PROBE_TAIL+=("${CONSUMING_SHAPE}")
+  fi
 fi
 
 # Identifies the attempt currently in flight, for the audit log. Set by the cell loop and by attempt() rather than
@@ -459,7 +499,8 @@ echo "  overlaps: ${OVERLAPS[*]}" >&2
 echo "  limits:   ${LIMITS[*]}" >&2
 echo "  modes:    ${MODES[*]} (x ${REPLICATES} replicates)" >&2
 if [[ -n "${AXES_SUFFIX}" ]]; then
-  echo "  orderBy=${ORDER_BY}, consumingRows=${CONSUMING_ROWS} (non-default axes: CSV gains three trailing columns)" >&2
+  echo "  orderBy=${ORDER_BY}, consumingRows=${CONSUMING_ROWS}, consumingShape=${CONSUMING_SHAPE}" \
+      "(non-default axes: CSV gains four trailing columns)" >&2
 fi
 echo "  keyCardinality=${KEY_CARDINALITY}, range ${LOW_MB}-${HIGH_MB}MB, per-attempt timeout ${ATTEMPT_TIMEOUT_S}s" >&2
 echo "  per-attempt audit log: ${AUDIT_LOG}" >&2
@@ -471,13 +512,13 @@ prebuild
 # (low_mb, high_mb] -- and both bounds were tried, so neither is an interpolation. consecutive_runs_required is the
 # unanimity threshold behind the survival at high_mb; at 1 that would be a single observation of a value that varies
 # between runs, which is why no arm is set to 1.
-# At non-default axes the three axis values are appended to every row, so a CSV is self-describing when several runs'
+# At non-default axes the four axis values are appended to every row, so a CSV is self-describing when several runs'
 # output ends up concatenated or compared; at the defaults the columns are exactly the original eight.
 AXES_HEADER=""
 AXES_ROW=""
 if [[ -n "${AXES_SUFFIX}" ]]; then
-  AXES_HEADER=",order_by,key_cardinality,consuming_rows"
-  AXES_ROW=",${ORDER_BY},${KEY_CARDINALITY},${CONSUMING_ROWS}"
+  AXES_HEADER=",order_by,key_cardinality,consuming_rows,consuming_shape"
+  AXES_ROW=",${ORDER_BY},${KEY_CARDINALITY},${CONSUMING_ROWS},${CONSUMING_SHAPE}"
 fi
 echo "overlap,mode,limit,replicate,outcome,low_mb,high_mb,consecutive_runs_required${AXES_HEADER}"
 
