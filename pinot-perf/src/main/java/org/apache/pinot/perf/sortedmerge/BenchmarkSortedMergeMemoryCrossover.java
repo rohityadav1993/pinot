@@ -161,6 +161,10 @@ public class BenchmarkSortedMergeMemoryCrossover {
   /// the offline keys -- is the default and what every consuming result before this axis used. "IN_DOMAIN" rescales
   /// the consuming keys into the offline key domain so they compete in the merge; it is FULL-only and the fixture
   /// rejects it for other overlaps. Ignored when `_consumingRows` is 0.
+  ///
+  /// <p>At `_consumingRows` equal to `_rowsPerSegment` (50_000) the rescaling `j * rowsPerSegment / consumingRows` is
+  /// `j`, so IN_DOMAIN holds exactly the same data as TAIL with FULL overlap: that cell is a same-build replicate of
+  /// the TAIL one, not a new design point. Only 1_000_000 consuming rows differ.
   @Param({"TAIL"})
   private SortedMergeFixture.ConsumingShape _consumingShape;
 
