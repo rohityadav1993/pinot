@@ -225,11 +225,23 @@ axes_row="$(run_scenario consuming_threshold ORDER_BY=TS_ONLY KEY_CARDINALITY=10
 axes_tail="$(grep -m1 -- '-Xmx64m' "${WORK_DIR}/argv.log" | awk '{print $(NF-2), $(NF-1), $NF}')"
 check "non-default axes reach the probe in positional order" "TS_ONLY 100 500" "${axes_tail}"
 check "non-default axes are recorded on every CSV row" \
-    "DISJOINT,OFF,1000,1,BRACKET,284,300,1,TS_ONLY,100,500" "${axes_row}"
+    "DISJOINT,OFF,1000,1,BRACKET,284,300,1,TS_ONLY,100,500,TAIL" "${axes_row}"
+
+rm -f "${WORK_DIR}/argv.log"
+shape_row="$(run_scenario consuming_threshold OVERLAPS=FULL CONSUMING_ROWS=500 CONSUMING_SHAPE=IN_DOMAIN)"
+shape_tail="$(grep -m1 -- '-Xmx64m' "${WORK_DIR}/argv.log" | awk '{print $(NF-1), $NF}')"
+check "an in-domain consuming shape follows consumingRows on the probe command line" "500 IN_DOMAIN" "${shape_tail}"
+check "the consuming shape is recorded on every CSV row" \
+    "FULL,OFF,1000,1,BRACKET,284,300,1,TS_VAL,1,500,IN_DOMAIN" "${shape_row}"
+
+rm -f "${WORK_DIR}/argv.log"
+run_scenario consuming_threshold CONSUMING_ROWS=500 >/dev/null
+tail_tail="$(grep -m1 -- '-Xmx64m' "${WORK_DIR}/argv.log" | awk '{print $(NF-1), $NF}')"
+check "the default TAIL shape is not passed to the probe at all" "1 500" "${tail_tail}"
 
 # Not an OOM: the consuming segment never finished building, so the operator never ran.
 check "dying while building the consuming segment is not an operator measurement" \
-    "DISJOINT,OFF,1000,1,ERROR_FIXTURE_NOT_READY,,,1,TS_VAL,1,500" \
+    "DISJOINT,OFF,1000,1,ERROR_FIXTURE_NOT_READY,,,1,TS_VAL,1,500,TAIL" \
     "$(run_scenario consuming_build_oom CONSUMING_ROWS=500)"
 
 echo "audit trail:"
@@ -259,6 +271,11 @@ check "a floor at or above the ceiling is refused" "REFUSED" "$(refusal LOW_MB=4
 check "an unknown ORDER_BY is refused" "REFUSED" "$(refusal ORDER_BY=BOGUS)"
 check "a negative CONSUMING_ROWS is refused" "REFUSED" "$(refusal CONSUMING_ROWS=-1)"
 check "a LIMIT past INT_MAX is refused" "REFUSED" "$(refusal LIMITS=2147483648)"
+check "IN_DOMAIN without a consuming segment is refused" "REFUSED" \
+    "$(refusal OVERLAPS=FULL CONSUMING_SHAPE=IN_DOMAIN)"
+check "IN_DOMAIN over an overlap other than FULL is refused" "REFUSED" \
+    "$(refusal CONSUMING_ROWS=500 CONSUMING_SHAPE=IN_DOMAIN)"
+check "an unknown CONSUMING_SHAPE is refused" "REFUSED" "$(refusal CONSUMING_ROWS=500 CONSUMING_SHAPE=BOGUS)"
 # Without this the refusals above could pass for the wrong reason (the script never starting at all).
 check "the widest valid LIMIT is accepted" "ACCEPTED" "$(refusal LIMITS=2147483647)"
 
