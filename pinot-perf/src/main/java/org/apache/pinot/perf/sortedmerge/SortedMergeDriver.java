@@ -32,12 +32,14 @@ import org.apache.pinot.core.operator.combine.MinMaxValueBasedSelectionOrderByCo
 import org.apache.pinot.core.operator.combine.StreamingSelectionOrderByCombineOperator;
 import org.apache.pinot.core.plan.CombinePlanNode;
 import org.apache.pinot.core.plan.PlanNode;
+import org.apache.pinot.core.plan.SelectionPlanNode;
 import org.apache.pinot.core.plan.maker.InstancePlanMakerImplV2;
 import org.apache.pinot.core.plan.maker.PlanMaker;
 import org.apache.pinot.core.query.executor.ResultsBlockStreamer;
 import org.apache.pinot.core.query.request.context.QueryContext;
 import org.apache.pinot.core.query.request.context.utils.QueryContextConverterUtils;
 import org.apache.pinot.core.util.QueryMultiThreadingUtils;
+import org.apache.pinot.segment.spi.ImmutableSegment;
 import org.apache.pinot.segment.spi.IndexSegment;
 import org.apache.pinot.segment.spi.SegmentContext;
 import org.apache.pinot.spi.utils.CommonConstants.Server;
@@ -85,7 +87,15 @@ public final class SortedMergeDriver {
   ///
   /// <p>{@link #TS_VAL} appends the globally unique {@link SortedMergeFixture#VAL_COL} as a tiebreaker specifically
   /// to defeat that tightening: with it, the ORDER BY has two expressions but only the first is a sorted column, so
-  /// the prefix (1) is shorter than the ORDER BY (2) and the block stays pinned at `MAX_DOC_PER_CALL` in every cell.
+  /// the prefix (1) is shorter than the ORDER BY (2), the block stays pinned at `MAX_DOC_PER_CALL` in every cell, and
+  /// `StreamingSelectionOrderByOperator` runs in its "tail to sort" mode (a bounded per-run buffer) while `OFF` takes
+  /// the partially-sorted path. This holds only if `valCol` is NOT physically sorted in the segment, which is why the
+  /// fixture permutes it within each segment and checks the outcome; [#prepare] re-checks the planner's own input
+  /// (`isColumnPhysicallySorted`) for every segment and refuses to run otherwise.
+  ///
+  /// <p><b>Results from before fixture version 2 are not valid for `TS_VAL`.</b> `valCol` was ascending within each
+  /// segment then, so Pinot flagged it sorted, the prefix was 2 and `TS_VAL` ran the same "no tail to sort" plan as
+  /// {@link #TS_ONLY}. Treat any earlier `TS_VAL` number as a `TS_ONLY` number.
   /// That total order is also what makes the strict gate under this shape possible -- see [#TS_ONLY] and
   /// [SortedMergeMemoryProbe] for why the gate cannot be as strong there.
   ///
@@ -244,9 +254,33 @@ public final class SortedMergeDriver {
     QueryContext queryContext = buildQueryContext(limit, mode, blockSize, maxExecutionThreads, orderBy);
     List<PlanNode> planNodes = new ArrayList<>(segments.size());
     for (IndexSegment segment : segments) {
+      requireExpectedSortedPrefix(segment, queryContext, orderBy);
       planNodes.add(PLAN_MAKER.makeStreamingSegmentPlanNode(new SegmentContext(segment), queryContext));
     }
     return new PreparedQuery(queryContext, planNodes, segments.size(), orderBy);
+  }
+
+  /// Guard: the length of the ORDER BY's physically sorted prefix, computed from the same segment metadata
+  /// `SelectionPlanNode` reads, must be what the shape is meant to exercise. An immutable segment has `tsCol` sorted,
+  /// so the prefix is 1: equal to the ORDER BY length for `TS_ONLY` ("no tail to sort") and shorter for `TS_VAL`
+  /// ("tail to sort"). A mutable (consuming) segment is never sorted, so its prefix is 0. A `TS_VAL` run where
+  /// `valCol` was sorted would report 2 here and be a `TS_ONLY` run in disguise.
+  private static void requireExpectedSortedPrefix(IndexSegment segment, QueryContext queryContext, OrderBy orderBy) {
+    List<String> columns = orderBy == OrderBy.TS_VAL ? List.of(SortedMergeFixture.TS_COL, SortedMergeFixture.VAL_COL)
+        : List.of(SortedMergeFixture.TS_COL);
+    int prefix = 0;
+    while (prefix < columns.size()
+        && SelectionPlanNode.isColumnPhysicallySorted(segment, queryContext, columns.get(prefix))) {
+      prefix++;
+    }
+    int expected = segment instanceof ImmutableSegment ? 1 : 0;
+    if (prefix != expected) {
+      String found = prefix + " of " + columns.size() + " ORDER BY columns";
+      throw new IllegalStateException(
+          "Sorted-prefix check failed for " + segment.getSegmentName() + " under " + orderBy + ": the planner would"
+              + " see a sorted prefix of " + found + ", expected " + expected + ". The shape is not exercising the"
+              + " path it claims to; do not report this run.");
+    }
   }
 
   /// Plans and drains one combine over an already-prepared query.

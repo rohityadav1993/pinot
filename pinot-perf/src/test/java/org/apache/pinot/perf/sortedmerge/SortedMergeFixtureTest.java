@@ -289,6 +289,52 @@ public class SortedMergeFixtureTest {
   }
 
   @Test
+  public void valColIsAPermutationWithinEachSegmentAndNeverMonotone() {
+    for (int n : new int[]{10, 40, 50, 100, 50_000, 1_000_000}) {
+      boolean[] seen = new boolean[n];
+      boolean monotone = true;
+      long previous = -1;
+      for (int j = 0; j < n; j++) {
+        long offset = SortedMergeFixture.valOffset(j, n);
+        assertTrue(offset >= 0 && offset < n, "offset in range for n=" + n);
+        assertFalse(seen[(int) offset], "offset repeated for n=" + n);
+        seen[(int) offset] = true;
+        monotone &= offset > previous;
+        previous = offset;
+      }
+      assertFalse(monotone, "valCol offsets must not ascend for n=" + n);
+    }
+    assertThrows(IllegalArgumentException.class, () -> SortedMergeFixture.valOffset(0, 2 * 7919));
+  }
+
+  @Test
+  public void offlineAndConsumingValColAreUnsortedAndGloballyUnique() {
+    try {
+      List<IndexSegment> segments = SortedMergeFixture.segments(Overlap.FULL, 3, 100, 1, 40);
+      assertEquals(segments.size(), 4);
+      long expectedMin = 0;
+      for (int i = 0; i < segments.size(); i++) {
+        IndexSegment segment = segments.get(i);
+        DataSourceMetadata metadata = segment.getDataSource(SortedMergeFixture.VAL_COL).getDataSourceMetadata();
+        boolean consuming = i == 3;
+        int rows = consuming ? 40 : 100;
+        if (!consuming) {
+          // The real outcome, not the generator's intent: the data source is what the planner asks.
+          assertFalse(metadata.isSorted(), "offline valCol must not be flagged sorted, segment " + i);
+          assertEquals(metadata.getCardinality(), rows, "every valCol value distinct within segment " + i);
+        }
+        // Ranges are contiguous and disjoint across the whole mix, so uniqueness holds globally.
+        assertEquals(((Number) metadata.getMinValue()).longValue(), expectedMin, "min of segment " + i);
+        assertEquals(((Number) metadata.getMaxValue()).longValue(), expectedMin + rows - 1, "max of segment " + i);
+        expectedMin += rows == 40 ? 40 : 100;
+      }
+      SortedMergeFixture.requireValColUnsorted(segments.subList(0, 3), "test");
+    } finally {
+      SortedMergeFixture.purgeAll();
+    }
+  }
+
+  @Test
   public void zeroConsumingRowsReturnsExactlyTheOfflineSegments() {
     try {
       List<IndexSegment> offline = SortedMergeFixture.segments(Overlap.FULL, 2, 50, 1);

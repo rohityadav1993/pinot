@@ -174,6 +174,16 @@
 # Reading consuming results. A TAIL cell's printed overlap depth is measured at the midpoint of the global key range, so
 # once consumingRows is much larger than rowsPerSegment the consuming segment alone decides it (FULL and PARTIAL both
 # read 1 at 1000000). Label those cells by overlap, shape and consumingRows, not by depth. IN_DOMAIN reads 101.
+#
+# ORDER BY shapes and fixture version. TS_ONLY (ORDER BY tsCol) has a fully sorted prefix: the per-cursor block is
+# min(limit + offset, 10000) and ON takes its "no tail to sort" path. TS_VAL (ORDER BY tsCol, valCol) is meant to have a
+# prefix of 1 of 2: block 10000 and ON takes its "tail to sort" path (a bounded per-run buffer), OFF the partially
+# sorted path. That requires valCol NOT to be sorted in the segment. Fixtures keyed without `_v2` (everything built
+# before the valCol permutation) had valCol ascending, so Pinot flagged it sorted, the prefix was 2, and TS_VAL ran the
+# TS_ONLY plan: ANY earlier TS_VAL result, JMH or bisection, is a TS_ONLY result and must not be reported as TS_VAL.
+# Fixture version 2 permutes valCol within each segment (valCol = segment*rowsPerSegment + (j*7919) % rows), checks
+# that no offline segment reports valCol sorted, and the driver checks the sorted prefix per segment before any run.
+# The old fixture directories are left on disk, unused. The first run of each K rebuilds its offline fixtures.
 # ==============================================================================
 
 set -u -o pipefail

@@ -122,9 +122,13 @@ public class BenchmarkSortedMergeMemoryCrossover {
   @Param({"OFF", "ON"})
   private SortedSelectionMergeMode _mode;
 
-  /// The two shapes described on [SortedMergeDriver.OrderBy]: `TS_VAL` keeps the existing `valCol` tiebreaker and
-  /// pins the per-cursor block at `MAX_DOC_PER_CALL`; `TS_ONLY` drops it, which tightens the block to
-  /// `min(limit + offset, MAX_DOC_PER_CALL)` and puts the `ON` arm on its "no tail to sort" emission path. Both
+  /// The two shapes described on [SortedMergeDriver.OrderBy]: `TS_VAL` keeps the `valCol` tiebreaker, which is
+  /// not a sorted column (the fixture permutes it within each segment, and the driver refuses to run otherwise), so
+  /// the sorted prefix is shorter than the ORDER BY: the per-cursor block stays at `MAX_DOC_PER_CALL` and `ON` runs
+  /// the "tail to sort" path; `TS_ONLY` drops it, which tightens the block to
+  /// `min(limit + offset, MAX_DOC_PER_CALL)` and puts the `ON` arm on its "no tail to sort" emission path. Results
+  /// measured before fixture version 2 had `valCol` ascending, hence sorted, so their `TS_VAL` ran the `TS_ONLY`
+  /// plan. Both
   /// values are swept by default -- this doubles the headline grid, deliberately, because the two shapes are
   /// expected to disagree about where the crossover falls and that disagreement is itself a result.
   @Param({"TS_VAL", "TS_ONLY"})
