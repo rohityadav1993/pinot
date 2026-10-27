@@ -59,8 +59,13 @@ public final class SortedMergeMemoryProbe {
   /// table holds comes back from both arms: nothing prunes, the per-segment top-K never fills, and the merge has to
   /// drain all of it. It is above [#FULL_MULTISET_LIMIT], so it is compared by row count plus digest like the
   /// 100_000 and 1_000_000 cells, never by retained rows.
+  private static final int[] GATE_LIMITS = {10, 100, 1_000, 10_000, 100_000, 1_000_000, Integer.MAX_VALUE};
+
+  /// A copy, so no caller can edit the sweep the gate runs.
   @VisibleForTesting
-  static final int[] GATE_LIMITS = {10, 100, 1_000, 10_000, 100_000, 1_000_000, Integer.MAX_VALUE};
+  static int[] gateLimits() {
+    return GATE_LIMITS.clone();
+  }
 
   /// Whether the gate retains both arms' rows for a limit, i.e. whether the full multiset (and sortedness) comparison
   /// is available. The one definition, so the gate and its test cannot disagree about where retention stops.
@@ -150,6 +155,7 @@ public final class SortedMergeMemoryProbe {
     List<String> failures = new ArrayList<>();
     int numPassed = 0;
     boolean strict = orderBy == OrderBy.TS_VAL;
+    long totalRows = (long) numSegments * rowsPerSegment + consumingRows;
     try {
       for (SortedMergeFixture.Overlap overlap : SortedMergeFixture.Overlap.values()) {
         List<IndexSegment> segments =
@@ -170,7 +176,8 @@ public final class SortedMergeMemoryProbe {
           // fixture reads exactly as it always has.
           String config = overlap + " depth=" + depth + " limit=" + limit + " keyCardinality=" + keyCardinality
               + (consumingRows > 0 ? " consumingRows=" + consumingRows : "");
-          String failureReason = cellVerdict(off, on, orderBy, collectRows);
+          boolean wholeTable = returnedWholeTable(off, totalRows);
+          String failureReason = cellVerdict(off, on, orderBy, collectRows, totalRows);
           if (failureReason != null) {
             failures.add(config + ": " + failureReason);
             continue;
@@ -192,6 +199,12 @@ public final class SortedMergeMemoryProbe {
                 ? "tsCol digest + tsCol multiset + sortedness (no full-row check: ties are not a total order)"
                 : "tsCol digest only (rows not retained above FULL_MULTISET_LIMIT, so no multiset and no "
                     + "sortedness check)";
+            if (wholeTable) {
+              // Every row came back, so there is no LIMIT boundary for ties to straddle and cellVerdict compared the
+              // full-row digest as well.
+              checkLevel = "full-row digest (whole table returned, so no tie can straddle the LIMIT)"
+                  + (collectRows ? " + multiset + sortedness" : "");
+            }
             // Whether the two arms actually chose different tied rows. Both full-row digests are computed, and
             // under this shape they are allowed to differ -- that freedom is the whole reason the strict comparison
             // had to be relaxed. Printing it turns "the gate was weakened" from an assertion into an observation:
@@ -221,6 +234,11 @@ public final class SortedMergeMemoryProbe {
     return EXIT_ERROR;
   }
 
+  /// Whether a cell returned every row of a table known to hold `totalRows` (negative: unknown, so never).
+  private static boolean returnedWholeTable(Result result, long totalRows) {
+    return totalRows >= 0 && result._numRows == totalRows;
+  }
+
   /// The per-cell pass/fail decision behind {@link #gate}, pulled out so the choice of strict versus tie-sound
   /// comparison -- and which checks run at which limits -- has exactly one implementation and can be driven directly
   /// from a test instead of only through a full `gate` run, where a correct pair of arms never exercises the fail
@@ -233,11 +251,22 @@ public final class SortedMergeMemoryProbe {
   @VisibleForTesting
   @Nullable
   static String cellVerdict(Result off, Result on, OrderBy orderBy, boolean collectRows) {
+    return cellVerdict(off, on, orderBy, collectRows, -1);
+  }
+
+  /// As [#cellVerdict(Result, Result, OrderBy, boolean)], told how many rows the table holds (`totalRows`, or -1 when
+  /// unknown). When a cell returned *every* row, ties cannot straddle the LIMIT boundary -- there is no boundary --
+  /// so the returned row set is fully determined even without a tiebreaker, and [OrderBy#TS_ONLY] is compared as
+  /// strictly as [OrderBy#TS_VAL]. That matters at `LIMIT Integer.MAX_VALUE`, where the weaker tsCol-only comparison
+  /// would otherwise be the only check on the largest result the harness produces.
+  @VisibleForTesting
+  @Nullable
+  static String cellVerdict(Result off, Result on, OrderBy orderBy, boolean collectRows, long totalRows) {
     if (off._numRows != on._numRows) {
       return "row count OFF=" + off._numRows + " ON=" + on._numRows;
     }
 
-    if (orderBy == OrderBy.TS_VAL) {
+    if (orderBy == OrderBy.TS_VAL || returnedWholeTable(off, totalRows)) {
       // OrderBy.TS_VAL, the pre-existing shape: output is byte-identical to before OrderBy existed.
       if (off._rowDigest != on._rowDigest) {
         return "multiset digest differs (OFF=" + off._rowDigest + " ON=" + on._rowDigest + ")";

@@ -237,11 +237,34 @@ public class SortedMergeGateTest {
     // The widest LIMIT must stay in the sweep: it is the cell where nothing prunes, so it is where a dropped block
     // would cost the most rows. And it must be compared by digest, because retaining Integer.MAX_VALUE worth of rows
     // is exactly the heap the operators under test are being measured for.
-    assertTrue(Arrays.stream(SortedMergeMemoryProbe.GATE_LIMITS).anyMatch(limit -> limit == Integer.MAX_VALUE));
+    assertTrue(Arrays.stream(SortedMergeMemoryProbe.gateLimits()).anyMatch(limit -> limit == Integer.MAX_VALUE));
     assertFalse(SortedMergeMemoryProbe.retainsRows(Integer.MAX_VALUE));
     assertFalse(SortedMergeMemoryProbe.retainsRows(1_000_000));
     assertTrue(SortedMergeMemoryProbe.retainsRows(10_000), "the boundary limit is still compared as a full multiset");
     assertFalse(SortedMergeMemoryProbe.retainsRows(10_001));
+  }
+
+  @Test
+  public void tsOnlyComparesFullRowsOnceTheWholeTableIsReturned() {
+    // At LIMIT Integer.MAX_VALUE every row comes back from both arms, so no tie can straddle the boundary and the row
+    // set is fully determined. Differing full-row digests then mean differing rows, and TS_ONLY must say so.
+    long totalRows = 5_000_000L;
+    Result off = result(totalRows, 111L, 7L, null);
+    Result on = result(totalRows, 222L, 7L, null);
+    assertEquals(SortedMergeMemoryProbe.cellVerdict(off, on, OrderBy.TS_ONLY, false, totalRows),
+        "multiset digest differs (OFF=111 ON=222)");
+    assertNull(SortedMergeMemoryProbe.cellVerdict(result(totalRows, 5L, 7L, null),
+        result(totalRows, 5L, 7L, null), OrderBy.TS_ONLY, false, totalRows));
+  }
+
+  @Test
+  public void tsOnlyStaysTieSoundBelowTheWholeTableOrWhenTheTotalIsUnknown() {
+    // The same differing full-row digests are legitimate when the LIMIT cut the result short (tied rows may straddle
+    // it), and must not fail then -- nor when the caller does not know the table size.
+    Result off = result(1_000_000, 111L, 7L, null);
+    Result on = result(1_000_000, 222L, 7L, null);
+    assertNull(SortedMergeMemoryProbe.cellVerdict(off, on, OrderBy.TS_ONLY, false, 5_000_000L));
+    assertNull(SortedMergeMemoryProbe.cellVerdict(off, on, OrderBy.TS_ONLY, false));
   }
 
   @Test
