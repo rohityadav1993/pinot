@@ -129,18 +129,36 @@ import org.apache.pinot.spi.utils.builder.TableConfigBuilder;
 /// <p>`consumingRows` is a third, optional axis: when positive, one extra *consuming* segment -- a
 /// {@link MutableSegmentImpl}, the thing a realtime server queries while it is still ingesting -- is appended after
 /// the offline segments, as segment index `numSegments` (so 100 offline + 1 consuming by default). It uses the same
-/// row formula as the offline segments, with its own `base` chosen by {@link Overlap} for that index, so under
-/// DISJOINT it extends the key range past every offline segment, under PARTIAL it lands inside the offline ranges and
-/// under FULL it shares the common base. Zero, the default, builds no such segment and leaves every existing cache
-/// key, fixture and result unchanged.
+/// row formula as the offline segments, with its own `base` chosen by {@link Overlap} for that index and
+/// `consumingRows` rows. With the default 100 x 50,000 shape and K=1 that places it as follows, and *how much* of the
+/// key space it covers depends on `consumingRows`, not only on the overlap:
+///
+/// ```
+/// overlap    consuming base   covers (consumingRows=50000)   covers (consumingRows=1000000)   offline data ends at
+/// DISJOINT   5,000,000        5,000,000..5,049,999           5,000,000..5,999,999             4,999,999
+/// PARTIAL    500,000          500,000..549,999               500,000..1,499,999               544,999
+/// FULL       0                0..49,999                      0..999,999                       49,999
+/// ```
+///
+/// So at 50,000 rows PARTIAL and FULL land inside the offline key range, while at 1,000,000 rows all three shapes run
+/// past the end of it: the consuming segment holds the largest keys, and under the default `TAIL` consuming shape its
+/// extra rows come after every offline row in sort order. Zero rows builds no such segment and leaves every existing
+/// cache key, fixture and result unchanged.
 ///
 /// <p>The consuming segment is deliberately *not* cached on disk. It is built in this JVM, off-heap, with the
 /// {@link MmapMemoryManager} that `RealtimeSegmentDataManager` selects by default (`realtime.alloc.offheap=true`), in a
 /// temporary directory that is deleted by {@link #destroyAll()}. A mutable segment has no on-disk form to reuse, so
-/// every JVM -- every JMH fork, every bisection attempt -- pays its build cost again; the build time and off-heap
-/// footprint are logged once per JVM so that cost is visible rather than hidden in setup. Its tsCol dictionary and
-/// the inverted index the realtime `RealtimeSegmentConfig.Builder` adds on a table's sorted column are built exactly
-/// as production would build them, rather than switched off to make the segment cheaper.
+/// every JVM -- every JMH fork, every bisection attempt -- pays its build cost again; the build time, off-heap size
+/// and *on-heap* footprint are logged once per JVM so that cost is visible rather than hidden in setup. Its tsCol
+/// dictionary and the inverted index the realtime `RealtimeSegmentConfig.Builder` adds on a table's sorted column are
+/// built exactly as production would build them, rather than switched off to make the segment cheaper.
+///
+/// <p><b>The on-heap part is not small and it is part of every heap measurement.</b> The realtime inverted index keeps
+/// one bitmap per distinct tsCol value on the heap, so the footprint scales with the number of distinct keys. The
+/// logged `on-heap retained` figure is what survives a `System.gc()` after the build, minus what survived one before
+/// it. A minimum-surviving-heap result for a consuming cell therefore includes that figure; an ON-versus-OFF
+/// comparison at the same `consumingRows` is unaffected, but comparing against a `consumingRows=0` result needs it
+/// subtracted.
 ///
 /// <p>What the consuming segment changes about the query is not the data but the leaf: a mutable data source never
 /// reports itself sorted, so under `ON` its leaf is the ordinary `SelectionOrderByOperator` -- a full scan plus top-K
@@ -228,6 +246,8 @@ public final class SortedMergeFixture {
   private static final Map<String, Integer> DEPTH_CACHE = new ConcurrentHashMap<>();
   /// In-JVM only, keyed like [#SEGMENT_CACHE] plus a `_consuming<N>` suffix. Never persisted: see the class javadoc.
   private static final Map<String, ConsumingSegment> CONSUMING_CACHE = new ConcurrentHashMap<>();
+  /// Prefix of every consuming segment's temporary directory; the owning pid follows it.
+  private static final String CONSUMING_DIR_PREFIX = "pinot-arm4-consuming-";
 
   /// A built consuming segment together with what has to be released with it: the off-heap memory manager is closed
   /// by [MutableSegmentImpl#destroy], but the temporary directory its mmap files and consumer directory live in is not.
@@ -633,14 +653,19 @@ public final class SortedMergeFixture {
           "valCol would overflow INT with " + numSegments + " x " + rowsPerSegment + " offline rows plus "
               + consumingRows + " consuming rows (" + key + ")");
     }
+    sweepAbandonedConsumingDirs();
     long startNs = System.nanoTime();
+    long heapBefore = usedHeapAfterGc();
     File dir;
     try {
-      dir = Files.createTempDirectory("pinot-arm4-consuming-").toFile();
+      // The pid is in the name so a later JVM can tell whether the owner is still alive; see
+      // sweepAbandonedConsumingDirs.
+      dir = Files.createTempDirectory(CONSUMING_DIR_PREFIX + ProcessHandle.current().pid() + "-").toFile();
     } catch (IOException e) {
       throw new RuntimeException("Failed to create a directory for the consuming segment " + key, e);
     }
     MutableSegmentImpl segment = null;
+    boolean built = false;
     try {
       String segmentName = key + "_seg_" + numSegments;
       RealtimeSegmentStatsHistory statsHistory =
@@ -665,15 +690,71 @@ public final class SortedMergeFixture {
         throw new IllegalStateException(
             "Consuming segment indexed " + segment.getNumDocsIndexed() + " rows, expected " + consumingRows);
       }
-      System.out.printf("[arm4] built consuming segment %s in %.1fs: %d rows, %.1f MiB off-heap allocated%n", key,
-          (System.nanoTime() - startNs) / 1e9, consumingRows, memoryManager.getTotalAllocatedBytes() / 1048576.0);
+      double buildSeconds = (System.nanoTime() - startNs) / 1e9;
+      // After the timing, because System.gc() is not part of what the build costs. The delta is what the segment
+      // keeps reachable on the heap -- chiefly the inverted index's per-dictId bitmaps -- and is what a heap
+      // measurement of a consuming cell has to carry before the merge allocates anything.
+      long onHeapRetained = usedHeapAfterGc() - heapBefore;
+      System.out.printf("[arm4] built consuming segment %s in %.1fs: %d rows, %.1f MiB off-heap allocated, "
+              + "on-heap retained %.1f MiB%n", key, buildSeconds, consumingRows,
+          memoryManager.getTotalAllocatedBytes() / 1048576.0, onHeapRetained / 1048576.0);
+      built = true;
       return new ConsumingSegment(segment, dir);
     } catch (Exception e) {
-      if (segment != null) {
-        segment.destroy();
-      }
-      FileUtils.deleteQuietly(dir);
       throw new RuntimeException("Failed to build the consuming segment " + key, e);
+    } finally {
+      // finally rather than catch (Exception): an OutOfMemoryError while building is exactly what a small-heap
+      // bisection attempt produces, it is not an Exception, and it must not leave the directory behind. (When the
+      // JVM is run with -XX:+ExitOnOutOfMemoryError nothing here runs at all, which is what the sweep is for.)
+      if (!built) {
+        try {
+          if (segment != null) {
+            segment.destroy();
+          }
+        } catch (Throwable ignored) {
+          // Best effort; the directory is removed regardless.
+        }
+        FileUtils.deleteQuietly(dir);
+      }
+    }
+  }
+
+  /// Heap in use after a full collection. Only meaningful as a difference between two calls in one thread of one JVM,
+  /// and only approximately so: other threads may be allocating.
+  private static long usedHeapAfterGc() {
+    System.gc();
+    Runtime runtime = Runtime.getRuntime();
+    return runtime.totalMemory() - runtime.freeMemory();
+  }
+
+  /// Deletes consuming-segment directories left behind by JVMs that died without cleaning up -- the OOM-killed
+  /// attempts of a bisection, since `-XX:+ExitOnOutOfMemoryError` skips shutdown hooks. A directory is named
+  /// `pinot-arm4-consuming-<pid>-<random>` and is only deleted when no process with that pid is alive, so a concurrent
+  /// JVM's live segment is never touched. A recycled pid just means a stale directory is kept until the next sweep.
+  private static void sweepAbandonedConsumingDirs() {
+    File[] entries = FileUtils.getTempDirectory().listFiles();
+    if (entries == null) {
+      return;
+    }
+    for (File entry : entries) {
+      String name = entry.getName();
+      if (!entry.isDirectory() || !name.startsWith(CONSUMING_DIR_PREFIX)) {
+        continue;
+      }
+      String rest = name.substring(CONSUMING_DIR_PREFIX.length());
+      int dash = rest.indexOf('-');
+      if (dash <= 0) {
+        continue;
+      }
+      try {
+        long pid = Long.parseLong(rest.substring(0, dash));
+        if (ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false)) {
+          continue;
+        }
+      } catch (NumberFormatException e) {
+        continue;
+      }
+      FileUtils.deleteQuietly(entry);
     }
   }
 

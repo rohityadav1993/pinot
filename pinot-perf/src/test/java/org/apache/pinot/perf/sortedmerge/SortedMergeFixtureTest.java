@@ -160,6 +160,24 @@ public class SortedMergeFixtureTest {
   }
 
   @Test
+  public void buildingAConsumingSegmentSweepsDeadOwnersDirectoriesAndNeverLiveOnes()
+      throws IOException {
+    // A directory whose owning pid no longer exists is what an OOM-killed bisection attempt leaves behind. One owned by
+    // this very (live) process stands in for a concurrent JVM's segment, which must survive the sweep.
+    File dead = Files.createTempDirectory("pinot-arm4-consuming-999999999-").toFile();
+    File live = Files.createTempDirectory("pinot-arm4-consuming-" + ProcessHandle.current().pid() + "-").toFile();
+    try {
+      SortedMergeFixture.segments(Overlap.FULL, 2, 50, 1, 10);
+      assertFalse(dead.exists(), "a directory whose owner is gone must be swept");
+      assertTrue(live.isDirectory(), "a live owner's directory must never be swept");
+    } finally {
+      SortedMergeFixture.purgeAll();
+      FileUtils.deleteQuietly(dead);
+      FileUtils.deleteQuietly(live);
+    }
+  }
+
+  @Test
   public void zeroConsumingRowsReturnsExactlyTheOfflineSegments() {
     try {
       List<IndexSegment> offline = SortedMergeFixture.segments(Overlap.FULL, 2, 50, 1);
