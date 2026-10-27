@@ -26,6 +26,7 @@ import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
 import java.util.List;
 import org.apache.commons.io.FileUtils;
+import org.apache.pinot.perf.sortedmerge.SortedMergeFixture.ConsumingShape;
 import org.apache.pinot.perf.sortedmerge.SortedMergeFixture.Overlap;
 import org.apache.pinot.segment.local.indexsegment.mutable.MutableSegmentImpl;
 import org.apache.pinot.segment.spi.IndexSegment;
@@ -37,6 +38,7 @@ import org.testng.annotations.Test;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertSame;
+import static org.testng.Assert.assertThrows;
 import static org.testng.Assert.assertTrue;
 
 
@@ -154,6 +156,41 @@ public class SortedMergeFixtureTest {
       assertEquals(SortedMergeFixture.measuredDepth(Overlap.PARTIAL, numSegments, rowsPerSegment, 1, consumingRows),
           numSegments + 1);
       assertEquals(SortedMergeFixture.measuredDepth(Overlap.PARTIAL, numSegments, rowsPerSegment, 1, 0), numSegments);
+    } finally {
+      SortedMergeFixture.purgeAll();
+    }
+  }
+
+  @Test
+  public void inDomainConsumingKeysStayInsideTheOfflineKeyRangeAndCountTowardDepth() {
+    // 40 consuming rows over the offline domain [0, 99]: tsSource = j * 100 / 40, so the keys run 0..97. TAIL, by
+    // contrast, would put them at 300..339, beyond every offline key.
+    try {
+      List<IndexSegment> segments =
+          SortedMergeFixture.segments(Overlap.FULL, 3, 100, 1, 40, ConsumingShape.IN_DOMAIN);
+      DataSourceMetadata ts = segments.get(3).getDataSource(SortedMergeFixture.TS_COL).getDataSourceMetadata();
+      assertEquals(((Number) ts.getMinValue()).longValue(), 0L);
+      assertEquals(((Number) ts.getMaxValue()).longValue(), 97L);
+      DataSourceMetadata val = segments.get(3).getDataSource(SortedMergeFixture.VAL_COL).getDataSourceMetadata();
+      assertEquals(((Number) val.getMinValue()).longValue(), 300L, "valCol must still start above the offline range");
+      assertEquals(
+          SortedMergeFixture.measuredDepth(Overlap.FULL, 3, 100, 1, 40, ConsumingShape.IN_DOMAIN), 4);
+      // The default shape is a different cache entry and still trails the offline keys.
+      List<IndexSegment> tail = SortedMergeFixture.segments(Overlap.FULL, 3, 100, 1, 40);
+      DataSourceMetadata tailTs = tail.get(3).getDataSource(SortedMergeFixture.TS_COL).getDataSourceMetadata();
+      assertEquals(((Number) tailTs.getMaxValue()).longValue(), 39L);
+    } finally {
+      SortedMergeFixture.purgeAll();
+    }
+  }
+
+  @Test
+  public void inDomainIsRejectedForOverlapsWithoutASingleKeyDomain() {
+    try {
+      assertThrows(IllegalArgumentException.class,
+          () -> SortedMergeFixture.segments(Overlap.PARTIAL, 3, 100, 1, 40, ConsumingShape.IN_DOMAIN));
+      assertThrows(IllegalArgumentException.class,
+          () -> SortedMergeFixture.segments(Overlap.DISJOINT, 3, 100, 1, 40, ConsumingShape.IN_DOMAIN));
     } finally {
       SortedMergeFixture.purgeAll();
     }
