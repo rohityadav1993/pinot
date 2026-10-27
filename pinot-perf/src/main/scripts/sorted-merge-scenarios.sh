@@ -43,21 +43,20 @@
 #              tail-to-sort path's per-run heap hold more than one row.                  96 cells (24 per K).
 #   consuming  One mutable off-heap consuming segment is added after the 100 offline ones; K=1; LIMIT 1000, 1000000 and
 #              2147483647. Under ON its leaf is a full scan plus top-K, and the combine never prunes it.
-#                (IN_DOMAIN at consumingRows 50000 is NOT a new design point: j * rowsPerSegment / consumingRows is j, so
-#                 it holds exactly the data of TAIL c50000 FULL and is a same-build replicate of those cells. Only
-#                 consumingRows 1000000 differs between the shapes. The group stays so the replicate is on record.)
+#                (IN_DOMAIN at consumingRows 50000 is not run: j * rowsPerSegment / consumingRows is j, so it would hold
+#                 exactly the data of TAIL c50000 FULL. Only consumingRows 1000000 differs between the shapes.)
 #                TAIL (consuming tail beyond offline keys), consumingRows 50000 and 1000000, all three overlaps:
 #                  72 cells. The consuming keys run past (or, at 50000, sit inside) the offline keys, so at a small
 #                  LIMIT the segment is scanned in full but adds nothing to the result.
-#                IN_DOMAIN (consuming keys rescaled into the offline key domain), FULL only, consumingRows 50000 and
-#                  1000000: 24 cells. The consuming rows interleave with the offline rows and compete for the LIMIT,
+#                IN_DOMAIN (consuming keys rescaled into the offline key domain), FULL only, consumingRows 1000000:
+#                  12 cells. The consuming rows interleave with the offline rows and compete for the LIMIT,
 #                  which TAIL cannot show. FULL only because DISJOINT and PARTIAL have no single key domain.
 #              The limits are one small (the leaf's full scan is the whole cost and the merge's is negligible), one
 #              large (the headline cell, where the merge's retention matters) and the maximum (everything returns,
 #              consuming rows included). 10000 and 100000 are left out: they sit between regimes the two ends already
 #              bracket, and each added limit costs 12 cells per TAIL consumingRows value. The no-consuming baselines
 #              for these limits come from the anchors and max-limit scenarios (K=1, consumingRows=0) rather than being
-#              re-run here, so compare across scenarios only for runs from the same build on the same host.   96 cells.
+#              re-run here, so compare across scenarios only for runs from the same build on the same host.   84 cells.
 #
 # JMH settings, pinned, and which cells get which. LIMITs below 1000000 run in the benchmark's AverageTime mode,
 # `-bm avgt -wi 1 -i 3 -r 5s -w 5s`. LIMITs of 1000000 and above run single-shot, `-bm ss -wi 3 -i 10`: a single
@@ -133,17 +132,18 @@
 #         1,000,000 TAIL fails to build in 192 MiB and builds in 256 MiB; 1,000,000 IN_DOMAIN built in 64 MiB in 6 of 6
 #         launches (3 ON, 3 OFF) and did not get as far as the build line in 32 or 48 MiB (2 launches each), so its build
 #         floor is in (48, 64] MiB; 50,000 rows IN_DOMAIN printed its build line in 64 MiB in 3 of 3 launches.
-#     The floors are therefore 64 (50,000 rows, both shapes; and 1,000,000 IN_DOMAIN, which sits right on the build floor
-#     with no margin, so an ERROR_FIXTURE_NOT_READY row from that group means raise LOW_MB to 80 and rerun it, it is not a
-#     result) and 384 (1,000,000 TAIL: 1.5x the smallest heap it built in). A LOW_MB in the environment overrides all.
+#     The floors are therefore 64 (50,000 rows; and 1,000,000 IN_DOMAIN, which sits right on the build floor with no
+#     margin, so an ERROR_FIXTURE_NOT_READY row from that group means raise LOW_MB to 80 and rerun it, it is not a
+#     result) and 320 (1,000,000 TAIL: 1.25x the smallest heap it built in, 256 MiB; the margin is traded for
+#     resolution at small limits, and REPEATS guards the build noise). A LOW_MB in the environment overrides all.
 #   * The operator, not the build, sets ON's minimum at small limits. At LIMIT 1000 with FULL overlap, ON failed in the
 #     operator at 64 MiB with a 50,000-row and with a 1,000,000-row IN_DOMAIN segment (3 of 3 each, after the build line
 #     had printed) and survived at 72, 80 and 96 MiB (3 of 3 each); OFF survived at 64 MiB. The ON-versus-OFF
 #     difference at small limits is therefore a few MiB, near the floor, which is why the floor's resolution matters.
-#   * Resolution caveat for consuming-c1000000 (TAIL), floor 384. At small limits both arms probably survive at 384 MiB
+#   * Resolution caveat for consuming-c1000000 (TAIL), floor 320. At small limits both arms may still survive at 320 MiB
 #     and report AT_OR_BELOW_LOW, which hides ON-versus-OFF heap differences of the size seen above. In that group only
-#     the cells whose answer is above 384 MiB (the large limits) carry an ON-versus-OFF comparison; for the small-limit
-#     cells the group says only "fits in 384 MiB". Lowering the floor is not possible without losing the build itself.
+#     the cells whose answer is above 320 MiB carry an ON-versus-OFF comparison; for the others the group says only
+#     "fits in 320 MiB". The floor cannot go much lower without losing the build itself (it fails at 192 MiB).
 #   * Absolute minimum-heap numbers for consuming cells include that on-heap footprint. ON versus OFF at the same
 #     consumingRows and shape stays valid; comparing a consuming cell against a consumingRows=0 anchor needs the footprint
 #     above (it is logged on the `built consuming segment` line as `on-heap retained`) subtracted first.
@@ -163,8 +163,9 @@
 #   max-limit               12   ~30 to 45 min          ~2.5 to 3.5 h
 #   low-k                   96   ~70 to 100 min         ~6 to 8 h
 #   consuming (TAIL)        72   ~105 to 120 min        ~8 to 10 h
-#   consuming (IN_DOMAIN)   24   ~35 to 40 min          ~2.5 to 3.5 h
-#   consuming (both)        96   ~2.4 h                 ~11 to 13 h
+#   consuming (IN_DOMAIN)   12   ~25 to 30 min          ~1.5 to 2 h
+#   consuming (both)        84   ~2.2 h                 ~10 to 12 h
+#   all four scenarios     208   ~4.5 to 5 h            ~20 to 24 h
 #
 # These are planning figures good to perhaps +/-40%, and the bisection ones are the least certain: time one cell
 # (LIMITS, OVERLAPS and MODES narrowed to a single value) before queueing a whole scenario. The single-shot cells
@@ -233,8 +234,7 @@ case "${SCENARIO}" in
     ;;
   consuming)
     GROUPS_DEF+=("consuming-c50000|${ALL_OVERLAPS}|1|50000|1000,1000000,2147483647|TAIL|64")
-    GROUPS_DEF+=("consuming-c1000000|${ALL_OVERLAPS}|1|1000000|1000,1000000,2147483647|TAIL|384")
-    GROUPS_DEF+=("consuming-indomain-c50000|FULL|1|50000|1000,1000000,2147483647|IN_DOMAIN|64")
+    GROUPS_DEF+=("consuming-c1000000|${ALL_OVERLAPS}|1|1000000|1000,1000000,2147483647|TAIL|320")
     GROUPS_DEF+=("consuming-indomain-c1000000|FULL|1|1000000|1000,1000000,2147483647|IN_DOMAIN|64")
     ;;
 esac

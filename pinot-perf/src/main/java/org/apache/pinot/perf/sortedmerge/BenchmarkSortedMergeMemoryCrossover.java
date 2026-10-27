@@ -163,8 +163,8 @@ public class BenchmarkSortedMergeMemoryCrossover {
   /// rejects it for other overlaps. Ignored when `_consumingRows` is 0.
   ///
   /// <p>At `_consumingRows` equal to `_rowsPerSegment` (50_000) the rescaling `j * rowsPerSegment / consumingRows` is
-  /// `j`, so IN_DOMAIN holds exactly the same data as TAIL with FULL overlap: that cell is a same-build replicate of
-  /// the TAIL one, not a new design point. Only 1_000_000 consuming rows differ.
+  /// `j`, so IN_DOMAIN holds exactly the same data as TAIL with FULL overlap and is not a new design point; the
+  /// scenario script runs IN_DOMAIN only at 1_000_000 consuming rows.
   @Param({"TAIL"})
   private SortedMergeFixture.ConsumingShape _consumingShape;
 
