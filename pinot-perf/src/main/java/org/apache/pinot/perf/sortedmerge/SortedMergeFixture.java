@@ -186,6 +186,17 @@ import org.apache.pinot.spi.utils.builder.TableConfigBuilder;
 /// `numSegments * rowsPerSegment`, *not* from `numSegments * consumingRows`: the offline segments occupy
 /// `[0, numSegments * rowsPerSegment)`, so the consuming segment's values start just above that range whatever its
 /// own row count is. [#buildConsuming] rejects a combination that would overflow the INT column.
+///
+/// <p>{@link #VAL_COL} is deliberately *not* monotone within a segment: row `j` of an `n`-row segment holds
+/// `segmentIndex * rowsPerSegment + (j * VAL_STRIDE) % n`, a fixed bijection on `[0, n)`. An ascending `valCol` would
+/// make segment creation flag it sorted, and then `ORDER BY tsCol, valCol` has a fully sorted prefix, so neither arm
+/// ever takes its "tail to sort" path -- which is the whole reason the `TS_VAL` shape exists. [#requireValColUnsorted]
+/// checks the real outcome (what the data source reports) on every offline segment, whether built or reused.
+///
+/// <p><b>Fixture version.</b> Fixtures keyed without a `_v2` suffix (everything built up to and including the
+/// harness commit before this change) have an ascending `valCol`, are reported sorted, and ran `TS_VAL` on exactly
+/// the same plan as `TS_ONLY`. [#FIXTURE_VERSION] is part of the cache key so they are never reused; they are left on
+/// disk. Any result measured on them under `TS_VAL` is a `TS_ONLY` result.
 public final class SortedMergeFixture {
   private SortedMergeFixture() {
   }
@@ -194,6 +205,14 @@ public final class SortedMergeFixture {
   public static final String TS_COL = "tsCol";
   public static final String VAL_COL = "valCol";
   public static final String PAYLOAD_COL = "payloadCol";
+
+  /// Multiplier of the within-segment permutation of [#VAL_COL]; prime, so it is coprime to every row count that is
+  /// not a multiple of it. See [#valOffset].
+  static final long VAL_STRIDE = 7919L;
+
+  /// Part of every offline cache key. Version 2: `valCol` is a non-monotone permutation within each segment (version 1
+  /// was ascending and therefore sorted, which made `TS_VAL` plan identically to `TS_ONLY`).
+  static final int FIXTURE_VERSION = 2;
 
   public static final int DEFAULT_NUM_SEGMENTS = 100;
   public static final int DEFAULT_ROWS_PER_SEGMENT = 50_000;
@@ -428,9 +447,10 @@ public final class SortedMergeFixture {
   /// fixtures already on disk (`DISJOINT_100x50000`, `PARTIAL_100x50000`, `FULL_100x50000`) were built under this
   /// exact key with no cardinality suffix, and at K=1 the rows generated today are byte-identical to what
   /// [#records] always produced, so those directories must keep validating. Any other `keyCardinality` gets a
-  /// `_k<N>` suffix so a fixture built at one cardinality can never be mistaken for one built at another.
+  /// `_k<N>` suffix so a fixture built at one cardinality can never be mistaken for one built at another. Every key
+  /// carries `_v<FIXTURE_VERSION>`, so fixtures built before `valCol` was made unsorted are never picked up.
   private static String cacheKey(Overlap overlap, int numSegments, int rowsPerSegment, int keyCardinality) {
-    String base = overlap + "_" + numSegments + "x" + rowsPerSegment;
+    String base = overlap + "_" + numSegments + "x" + rowsPerSegment + "_v" + FIXTURE_VERSION;
     return keyCardinality == DEFAULT_KEY_CARDINALITY ? base : base + "_k" + keyCardinality;
   }
 
@@ -474,6 +494,7 @@ public final class SortedMergeFixture {
         List<IndexSegment> reused =
             tryLoadExisting(outDir, overlap, numSegments, rowsPerSegment, keyCardinality, key);
         if (reused != null) {
+          requireValColUnsortedOrRelease(reused, key);
           int depth = measureDepth(reused);
           DEPTH_CACHE.put(key, depth);
           System.out.printf("[arm4] reused %s in %.1fs, measured overlap depth %d%n", key,
@@ -605,12 +626,24 @@ public final class SortedMergeFixture {
       }
       throw new RuntimeException("Failed to build the " + overlap + " fixture", e);
     }
+    requireValColUnsortedOrRelease(segments, key);
     int depth = measureDepth(segments);
     DEPTH_CACHE.put(key, depth);
     writeCompletionMarker(outDir, overlap, numSegments, rowsPerSegment, keyCardinality);
     System.out.printf("[arm4] built %s in %.1fs, measured overlap depth %d%n", key, (System.nanoTime() - startNs) / 1e9,
         depth);
     return segments;
+  }
+
+  private static void requireValColUnsortedOrRelease(List<IndexSegment> segments, String key) {
+    try {
+      requireValColUnsorted(segments, key);
+    } catch (RuntimeException e) {
+      for (IndexSegment segment : segments) {
+        segment.destroy();
+      }
+      throw e;
+    }
   }
 
   /// Writes the `.arm4-complete` marker only after every segment has been built successfully, so a build that is
@@ -652,7 +685,7 @@ public final class SortedMergeFixture {
     List<GenericRow> records = new ArrayList<>(rowsPerSegment);
     for (int j = 0; j < rowsPerSegment; j++) {
       GenericRow record = new GenericRow();
-      fillRow(record, base + j, segmentIndex, rowsPerSegment, j, keyCardinality);
+      fillRow(record, base + j, segmentIndex, rowsPerSegment, rowsPerSegment, j, keyCardinality);
       records.add(record);
     }
     return records;
@@ -682,13 +715,43 @@ public final class SortedMergeFixture {
   /// count therefore sits exactly where an `R`-row segment at that index would, and its `valCol` cannot collide with
   /// an offline segment's.
   ///
+  /// <p>`rowsInSegment` is the segment's own row count (`rowsPerSegment` offline, `consumingRows` for the consuming
+  /// segment); {@link #VAL_COL} is permuted within `[0, rowsInSegment)` so it is unique but not ascending.
+  ///
   /// <p>`tsSource` is the {@link #TS_COL} value before dividing by K: `base + j` for every offline row, and for a
   /// consuming row whatever its {@link ConsumingShape} says.
-  private static void fillRow(GenericRow record, long tsSource, int segmentIndex, int rowsPerSegment, int j,
-      int keyCardinality) {
+  private static void fillRow(GenericRow record, long tsSource, int segmentIndex, int rowsPerSegment, int rowsInSegment,
+      int j, int keyCardinality) {
     record.putValue(TS_COL, tsSource / keyCardinality);
-    record.putValue(VAL_COL, segmentIndex * rowsPerSegment + j);
+    record.putValue(VAL_COL, (int) ((long) segmentIndex * rowsPerSegment + valOffset(j, rowsInSegment)));
     record.putValue(PAYLOAD_COL, PAYLOAD_FILLER + "_" + segmentIndex + "_" + j);
+  }
+
+  /// Row `j`'s offset within its segment's {@link #VAL_COL} range: `(j * VAL_STRIDE) % n`, in long arithmetic. A
+  /// bijection on `[0, n)` exactly when gcd(VAL_STRIDE, n) == 1, so values stay unique within the segment; it fails
+  /// loudly otherwise (only a multiple of 7919 rows can trigger it). That it is not monotone is checked on the built
+  /// segments by [#requireValColUnsorted] rather than assumed.
+  @VisibleForTesting
+  static long valOffset(int j, int n) {
+    if (n % VAL_STRIDE == 0) {
+      throw new IllegalArgumentException(
+          "Row count " + n + " is a multiple of " + VAL_STRIDE + ", so valCol's permutation would not be a bijection");
+    }
+    return (long) j * VAL_STRIDE % n;
+  }
+
+  /// Guard: fails if any offline segment reports {@link #VAL_COL} as sorted. Pinot marks a column sorted whenever the
+  /// data happens to be monotone, so what matters is the real outcome from the data source, not the generator's
+  /// intent. A sorted `valCol` silently turns `TS_VAL` into `TS_ONLY` (see the class javadoc).
+  @VisibleForTesting
+  static void requireValColUnsorted(List<IndexSegment> segments, String key) {
+    for (int i = 0; i < segments.size(); i++) {
+      if (segments.get(i).getDataSource(VAL_COL).getDataSourceMetadata().isSorted()) {
+        throw new IllegalStateException("Fixture " + key + " segment " + i + " reports " + VAL_COL + " as sorted, so "
+            + "ORDER BY tsCol, valCol would have a fully sorted prefix and TS_VAL would plan exactly like TS_ONLY. "
+            + "Rebuild it (-D" + PURGE_PROPERTY + "=true); do not report results from it.");
+      }
+    }
   }
 
   /// Builds the consuming segment: an off-heap [MutableSegmentImpl] holding `consumingRows` rows, appended as segment
@@ -751,7 +814,7 @@ public final class SortedMergeFixture {
         // consumingRows == rowsPerSegment.
         long tsSource =
             shape == ConsumingShape.IN_DOMAIN ? base + (long) j * rowsPerSegment / consumingRows : base + j;
-        fillRow(row, tsSource, numSegments, rowsPerSegment, j, keyCardinality);
+        fillRow(row, tsSource, numSegments, rowsPerSegment, consumingRows, j, keyCardinality);
         segment.index(row, null);
       }
       if (segment.getNumDocsIndexed() != consumingRows) {
