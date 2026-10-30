@@ -1013,7 +1013,8 @@ public class CommonConstants {
         /// of the queried segments is sorted on the group-by column, since only sorted segments avoid the hash
         /// aggregation; below it, `AUTO` falls back to the existing path. The threshold is not a separate setting: it
         /// reuses the streaming selection ORDER BY's [#SORTED_SELECTION_MERGE_AUTO_MIN_SORTED_RATIO] option (and its
-        /// default, 0.8), so changing that option changes both features. An unknown value fails the query.
+        /// default, 0.8), so changing that option changes both features. `AUTO` is experimental, like the selection
+        /// merge's: the ratio is not measured yet (#19924). An unknown value fails the query.
         ///
         /// **When it engages.** Only on the streaming instance plan, which is what a multi-stage engine leaf stage
         /// uses; the single-stage engine ignores the option. The query must `GROUP BY` exactly one plain column with
@@ -1835,6 +1836,9 @@ public class CommonConstants {
       /// [Broker.Request.QueryOptionKey#SORTED_SELECTION_MERGE_AUTO_MIN_SORTED_RATIO] option the streaming selection
       /// ORDER BY uses, not a separate one) of the queried segments are
       /// sorted on the group-by column, since only sorted segments avoid the hash aggregation; otherwise fall back.
+      ///
+      /// Experimental, like the selection merge's [SortedSelectionMergeMode#AUTO]: the ratio is not measured yet
+      /// (#19924).
       AUTO
     }
 

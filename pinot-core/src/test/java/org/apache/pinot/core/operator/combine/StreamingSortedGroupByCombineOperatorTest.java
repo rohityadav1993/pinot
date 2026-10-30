@@ -32,6 +32,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 import org.apache.commons.io.FileUtils;
+import org.apache.pinot.common.datatable.DataTable.MetadataKey;
 import org.apache.pinot.common.partition.function.ModuloPartitionFunction;
 import org.apache.pinot.common.proto.Plan;
 import org.apache.pinot.common.utils.DataSchema;
@@ -814,6 +815,23 @@ public class StreamingSortedGroupByCombineOperatorTest {
     assertEquals(on._rows.size(), off._rows.size());
     assertTrue(off._numGroupsLimitReached);
     assertTrue(on._numGroupsLimitReached, "The limit flag of the hash aggregation must reach the merged blocks");
+    // The response metadata is built from the terminal block alone; the streamed blocks' metadata is never read
+    assertEquals(on._terminal.getResultsMetadata().get(MetadataKey.NUM_GROUPS_LIMIT_REACHED.getName()), "true",
+        "The limit flag must reach the terminal block");
+  }
+
+  /// A SMART function that falls back to its sketch while the leaf returns final results makes the response report an
+  /// approximate result, as the non-streaming GROUP BY does. Only the terminal block reaches the response metadata.
+  @Test
+  public void testApproximatedFinalResultReachesTheTerminalBlock() {
+    String prefix = "SET serverReturnFinalResult=true; SET sortedGroupByMode='ON'; ";
+    Result approximated = run(_sortedSegments,
+        prefix + "SELECT key, DISTINCTCOUNTSMARTHLL(val, 'threshold=1') FROM testTable GROUP BY key" + BIG_LIMIT, 7);
+    assertEngaged(approximated);
+    assertEquals(approximated._terminal.getResultsMetadata().get(MetadataKey.APPROXIMATED_RESULT.getName()), "true");
+    Result exact = run(_sortedSegments, prefix + QUERY, 7);
+    assertEngaged(exact);
+    assertNull(exact._terminal.getResultsMetadata().get(MetadataKey.APPROXIMATED_RESULT.getName()));
   }
 
   // ---------------------------------------------------------------------------------------------------------------
@@ -1077,6 +1095,26 @@ public class StreamingSortedGroupByCombineOperatorTest {
         assertParity(_partitionedSortedSegments, "SET serverReturnFinalResult=true; " + QUERY, 5);
     assertEngaged(finalResults);
     assertEveryKeyOnce(finalResults._rows);
+  }
+
+  /// With parallel per-partition merges the terminal block reports the flags of every merge, not only the first: the
+  /// groups limit is hit only by the hash segments of the last partition, and the sketch fallback happens on the
+  /// worker threads.
+  @Test
+  public void testParallelMergesReportTheGroupByFlagsOfEveryPartition() {
+    List<IndexSegment> segments = new ArrayList<>(_partitionedSortedSegments);
+    int numUnsorted = _partitionedUnsortedSegments.size();
+    segments.addAll(_partitionedUnsortedSegments.subList(numUnsorted - 3, numUnsorted));
+    Result limited = run(segments, "SET sortedGroupByMode='ON'; SET numGroupsLimit=3; " + QUERY, 4);
+    assertTrue(explain(limited).get("parallel").getBool());
+    assertEquals(explainLong(limited, "numMergeGroups"), (long) NUM_PARTITIONS);
+    assertEquals(limited._terminal.getResultsMetadata().get(MetadataKey.NUM_GROUPS_LIMIT_REACHED.getName()), "true");
+
+    Result approximated = run(_partitionedSortedSegments,
+        "SET serverReturnFinalResult=true; SET sortedGroupByMode='ON'; "
+            + "SELECT key, DISTINCTCOUNTSMARTHLL(val, 'threshold=1') FROM testTable GROUP BY key" + BIG_LIMIT, 4);
+    assertTrue(explain(approximated).get("parallel").getBool());
+    assertEquals(approximated._terminal.getResultsMetadata().get(MetadataKey.APPROXIMATED_RESULT.getName()), "true");
   }
 
   /// Hash-then-sort segments run on the worker threads, so the thread-local group-key state of the hash aggregation is
