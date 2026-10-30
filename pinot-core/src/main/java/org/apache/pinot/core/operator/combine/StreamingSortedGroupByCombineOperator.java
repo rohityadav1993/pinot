@@ -22,9 +22,11 @@ import com.google.common.annotations.VisibleForTesting;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import javax.annotation.Nullable;
+import org.apache.pinot.common.datatable.DataTable.MetadataKey;
 import org.apache.pinot.common.request.context.ExpressionContext;
 import org.apache.pinot.common.request.context.OrderByExpressionContext;
 import org.apache.pinot.core.common.Operator;
@@ -34,6 +36,7 @@ import org.apache.pinot.core.operator.blocks.results.ExceptionResultsBlock;
 import org.apache.pinot.core.operator.blocks.results.GroupByResultsBlock;
 import org.apache.pinot.core.operator.blocks.results.MetadataResultsBlock;
 import org.apache.pinot.core.operator.streaming.BaseStreamingCombineOperator;
+import org.apache.pinot.core.query.aggregation.function.AggregationFunctionUtils;
 import org.apache.pinot.core.query.request.context.QueryContext;
 import org.apache.pinot.core.query.utils.OrderByComparatorFactory;
 import org.apache.pinot.spi.exception.EarlyTerminationException;
@@ -279,11 +282,51 @@ public class StreamingSortedGroupByCombineOperator extends BaseStreamingCombineO
   }
 
   private BaseResultsBlock terminalBlock() {
-    BaseResultsBlock block = attachExecutionStats(new MetadataResultsBlock());
+    boolean numGroupsLimitReached = false;
+    boolean numGroupsWarningLimitReached = false;
+    for (SortedGroupByMerge merge : _merges) {
+      numGroupsLimitReached |= merge.isNumGroupsLimitReached();
+      numGroupsWarningLimitReached |= merge.isNumGroupsWarningLimitReached();
+    }
+    // Every merge has finished, so every final result has been extracted
+    boolean approximatedResult =
+        AggregationFunctionUtils.hasApproximatedResult(_queryContext.getAggregationFunctions());
+    BaseResultsBlock block = attachExecutionStats(
+        new GroupByMetadataResultsBlock(numGroupsLimitReached, numGroupsWarningLimitReached, approximatedResult));
     for (SortedGroupByMerge merge : _merges) {
       merge.attachSchemaMismatchErrors(block);
     }
     return block;
+  }
+
+  /// The terminal block. The response metadata is built from this block alone (the streamed blocks' own metadata is
+  /// never read), so it carries the GROUP BY flags that [GroupByResultsBlock] reports on the non-streaming path.
+  private static class GroupByMetadataResultsBlock extends MetadataResultsBlock {
+    private final boolean _numGroupsLimitReached;
+    private final boolean _numGroupsWarningLimitReached;
+    private final boolean _approximatedResult;
+
+    GroupByMetadataResultsBlock(boolean numGroupsLimitReached, boolean numGroupsWarningLimitReached,
+        boolean approximatedResult) {
+      _numGroupsLimitReached = numGroupsLimitReached;
+      _numGroupsWarningLimitReached = numGroupsWarningLimitReached;
+      _approximatedResult = approximatedResult;
+    }
+
+    @Override
+    public Map<String, String> getResultsMetadata() {
+      Map<String, String> metadata = super.getResultsMetadata();
+      if (_numGroupsLimitReached) {
+        metadata.put(MetadataKey.NUM_GROUPS_LIMIT_REACHED.getName(), "true");
+      }
+      if (_numGroupsWarningLimitReached) {
+        metadata.put(MetadataKey.NUM_GROUPS_WARNING_LIMIT_REACHED.getName(), "true");
+      }
+      if (_approximatedResult) {
+        metadata.put(MetadataKey.APPROXIMATED_RESULT.getName(), "true");
+      }
+      return metadata;
+    }
   }
 
   @VisibleForTesting

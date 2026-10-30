@@ -227,6 +227,14 @@ final class SortedGroupByMerge {
     _merge.releaseAll();
   }
 
+  boolean isNumGroupsLimitReached() {
+    return _numGroupsLimitReached;
+  }
+
+  boolean isNumGroupsWarningLimitReached() {
+    return _numGroupsWarningLimitReached;
+  }
+
   <T extends BaseResultsBlock> T attachSchemaMismatchErrors(T block) {
     return _merge.attachSchemaMismatchErrors(block);
   }
