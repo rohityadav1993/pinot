@@ -169,6 +169,13 @@ public class MutableSegmentImplTestUtils {
 
   public static MutableSegmentImpl createMutableSegmentImpl(Schema schema, String partitionColumn,
       PartitionFunction partitionFunction, int partitionId, boolean dropRecordOnPartitionMismatch) {
+    return createMutableSegmentImpl(schema, partitionColumn, partitionFunction, partitionId,
+        dropRecordOnPartitionMismatch, false);
+  }
+
+  public static MutableSegmentImpl createMutableSegmentImpl(Schema schema, String partitionColumn,
+      PartitionFunction partitionFunction, int partitionId, boolean dropRecordOnPartitionMismatch,
+      boolean nullHandlingEnabled) {
     RealtimeSegmentStatsHistory statsHistory = mock(RealtimeSegmentStatsHistory.class);
     when(statsHistory.getEstimatedCardinality(anyString())).thenReturn(200);
     when(statsHistory.getEstimatedAvgColSize(anyString())).thenReturn(32);
@@ -187,6 +194,7 @@ public class MutableSegmentImplTestUtils {
         .setPartitionFunction(partitionFunction)
         .setPartitionId(partitionId)
         .setDropRecordOnPartitionMismatch(dropRecordOnPartitionMismatch)
+        .setDefaultNullHandlingEnabled(nullHandlingEnabled)
         .setConsumerDir(TEMP_DIR.getAbsolutePath() + "/" + UUID.randomUUID() + "/consumerDir")
         .build();
     return new MutableSegmentImpl(realtimeSegmentConfig, null);

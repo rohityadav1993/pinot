@@ -48,11 +48,13 @@ import org.apache.pinot.core.plan.PlanNode;
 import org.apache.pinot.core.plan.SelectionPlanNode;
 import org.apache.pinot.core.plan.StreamingInstanceResponsePlanNode;
 import org.apache.pinot.core.plan.StreamingSelectionPlanNode;
+import org.apache.pinot.core.plan.StreamingSortedGroupByPlanNode;
 import org.apache.pinot.core.query.aggregation.function.AggregationFunction;
 import org.apache.pinot.core.query.executor.ResultsBlockStreamer;
 import org.apache.pinot.core.query.prefetch.FetchPlanner;
 import org.apache.pinot.core.query.prefetch.FetchPlannerRegistry;
 import org.apache.pinot.core.query.request.context.QueryContext;
+import org.apache.pinot.core.query.request.context.SortedGroupByDecision;
 import org.apache.pinot.core.query.request.context.utils.QueryContextUtils;
 import org.apache.pinot.segment.spi.FetchContext;
 import org.apache.pinot.segment.spi.IndexSegment;
@@ -67,6 +69,7 @@ import org.apache.pinot.spi.query.QueryThreadContext;
 import org.apache.pinot.spi.utils.CommonConstants.Broker.Request.QueryOptionKey;
 import org.apache.pinot.spi.utils.CommonConstants.Server;
 import org.apache.pinot.spi.utils.CommonConstants.Server.AndRestrictionPushdownMode;
+import org.apache.pinot.spi.utils.CommonConstants.Server.SortedGroupByMode;
 import org.apache.pinot.spi.utils.CommonConstants.Server.SortedSelectionMergeMode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -252,6 +255,13 @@ public class InstancePlanMakerImplV2 implements PlanMaker {
       queryContext.setSortedSelectionMergeMode(SortedSelectionMergeMode.OFF);
     }
 
+    // Same reasoning for the sorted streaming GROUP BY: its combine needs the streaming path.
+    if (queryContext.getSortedGroupByMode() != SortedGroupByMode.OFF) {
+      LOGGER.debug("Ignoring {}={} for a non-streaming query: the sorted GROUP BY requires a streaming-capable path",
+          QueryOptionKey.SORTED_GROUP_BY_MODE, queryContext.getSortedGroupByMode());
+      queryContext.setSortedGroupByMode(SortedGroupByMode.OFF);
+    }
+
     int numSegments = segmentContexts.size();
     List<PlanNode> planNodes = new ArrayList<>(numSegments);
     List<FetchContext> fetchContexts;
@@ -432,6 +442,16 @@ public class InstancePlanMakerImplV2 implements PlanMaker {
       } else {
         queryContext.setChunkSizeExtractFinalResult(DEFAULT_CHUNK_SIZE_EXTRACT_FINAL_RESULT);
       }
+      // Set sortedGroupByMode (resolved to ON/OFF by makeStreamingInstancePlan; ignored by the non-streaming plan)
+      SortedGroupByMode sortedGroupByMode = QueryOptionsUtils.getSortedGroupByMode(queryOptions);
+      if (sortedGroupByMode != null) {
+        queryContext.setSortedGroupByMode(sortedGroupByMode);
+      }
+      // AUTO engages above the same sorted-segment ratio as the streaming selection ORDER BY
+      Double sortedGroupByAutoMinSortedRatio =
+          QueryOptionsUtils.getSortedSelectionMergeAutoMinSortedRatio(queryOptions);
+      queryContext.setSortedSelectionMergeAutoMinSortedRatio(sortedGroupByAutoMinSortedRatio != null
+          ? sortedGroupByAutoMinSortedRatio : _sortedSelectionMergeAutoMinSortedRatio);
       // Set streamingGroupByFlushThreshold
       Integer streamingGroupByFlushThreshold =
           QueryOptionsUtils.getStreamingGroupByFlushThreshold(queryOptions);
@@ -477,6 +497,7 @@ public class InstancePlanMakerImplV2 implements PlanMaker {
     applyQueryOptions(queryContext);
     boundGroupingSetsBaseAggregation(segmentContexts, queryContext);
     resolveSortedSelectionMergeMode(segmentContexts, queryContext);
+    resolveSortedGroupByMode(segmentContexts, queryContext);
 
     int numSegments = segmentContexts.size();
     List<PlanNode> planNodes = new ArrayList<>(numSegments);
@@ -592,8 +613,41 @@ public class InstancePlanMakerImplV2 implements PlanMaker {
     return enabled;
   }
 
+  /// Resolves the requested [SortedGroupByMode] to `ON` (engaged) or `OFF` before any plan node is built, because the
+  /// combine needs every segment to supply a key-ordered stream and so the decision is all-or-nothing. A requested
+  /// mode that the query shape rules out becomes `OFF` with the reason recorded on the [QueryContext], and the
+  /// existing GROUP BY path runs. Every segment can join the merge (sorted ones stream, the rest hash-then-sort), so
+  /// `ON` otherwise engages, and `AUTO` engages when at least the sorted-segment ratio of the segments is sorted
+  /// (the same threshold option as the streaming selection ORDER BY, `sortedSelectionMergeAutoMinSortedRatio`), where
+  /// avoiding the hash aggregation pays off. The segment counts are recorded as the context's decision. Reads
+  /// metadata only; acquires no segment.
+  private void resolveSortedGroupByMode(List<SegmentContext> segmentContexts, QueryContext queryContext) {
+    SortedGroupByMode mode = queryContext.getSortedGroupByMode();
+    if (mode == SortedGroupByMode.OFF) {
+      return;
+    }
+    String reason = StreamingSortedGroupByPlanNode.getFallbackReason(queryContext);
+    SortedGroupByDecision decision;
+    if (reason != null) {
+      decision = SortedGroupByDecision.queryShapeFallback(mode, reason);
+    } else {
+      decision = SortedGroupByDecision.fromSegmentCounts(mode, segmentContexts.size(),
+          StreamingSortedGroupByPlanNode.countSortedStreamable(segmentContexts, queryContext),
+          queryContext.getSortedSelectionMergeAutoMinSortedRatio());
+    }
+    if (!decision.isEngaged()) {
+      LOGGER.debug("Not using the sorted streaming GROUP BY for {}={}: {}", QueryOptionKey.SORTED_GROUP_BY_MODE, mode,
+          decision.getFallbackDetail());
+    }
+    queryContext.setSortedGroupByDecision(decision);
+  }
+
   @Override
   public PlanNode makeStreamingSegmentPlanNode(SegmentContext segmentContext, QueryContext queryContext) {
+    if (queryContext.isSortedGroupByEnabled()) {
+      // Resolved ON means the query and every segment qualified, see resolveSortedGroupByMode().
+      return new StreamingSortedGroupByPlanNode(segmentContext, queryContext);
+    }
     if (QueryContextUtils.isSelectionOnlyQuery(queryContext) && queryContext.getLimit() != 0) {
       // Use streaming operator only for non-empty selection-only query
       rewriteQueryContextWithHints(queryContext, segmentContext.getIndexSegment());

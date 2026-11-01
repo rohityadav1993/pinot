@@ -46,6 +46,7 @@ import org.apache.pinot.spi.config.table.FieldConfig;
 import org.apache.pinot.spi.data.Schema;
 import org.apache.pinot.spi.utils.CommonConstants;
 import org.apache.pinot.spi.utils.CommonConstants.Server;
+import org.apache.pinot.spi.utils.CommonConstants.Server.SortedGroupByMode;
 import org.apache.pinot.spi.utils.CommonConstants.Server.SortedSelectionMergeMode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -151,6 +152,12 @@ public class QueryContext implements QueryScopedCache {
   /// Selects the streaming k-way-merge selection ORDER BY combine over sorted segments. `AUTO` is resolved to `ON`
   /// or `OFF` by the plan maker before any plan node is built, so the plan-node gates only ever see a decided value.
   private SortedSelectionMergeMode _sortedSelectionMergeMode = Server.DEFAULT_SORTED_SELECTION_MERGE_MODE;
+  /// The sorted streaming GROUP BY mode the query asked for (the option), `OFF` by default.
+  private SortedGroupByMode _sortedGroupByMode = Server.DEFAULT_SORTED_GROUP_BY_MODE;
+  /// What the plan maker made of a requested sorted GROUP BY; `null` when none was requested. Set once, on the query
+  /// thread, while the instance plan is made, and read after (see [SortedGroupByDecision]).
+  @Nullable
+  private SortedGroupByDecision _sortedGroupByDecision;
   /// Minimum fraction of sorted segments for `AUTO` to resolve to `ON`
   private double _sortedSelectionMergeAutoMinSortedRatio =
       Server.DEFAULT_SORTED_SELECTION_MERGE_AUTO_MIN_SORTED_RATIO;
@@ -618,6 +625,36 @@ public class QueryContext implements QueryScopedCache {
       return false;
     }
     return _sortedSelectionMergeMode != SortedSelectionMergeMode.OFF;
+  }
+
+  /// The mode the query asked for. Whether it engaged is [#isSortedGroupByEnabled()].
+  public SortedGroupByMode getSortedGroupByMode() {
+    return _sortedGroupByMode;
+  }
+
+  public void setSortedGroupByMode(SortedGroupByMode sortedGroupByMode) {
+    _sortedGroupByMode = sortedGroupByMode;
+  }
+
+  /// Whether the plan uses the sorted streaming GROUP BY: it was requested and the plan maker engaged it.
+  public boolean isSortedGroupByEnabled() {
+    return _sortedGroupByDecision != null && _sortedGroupByDecision.isEngaged();
+  }
+
+  /// The plan maker's decision on a requested sorted streaming GROUP BY, or `null` when none was requested.
+  @Nullable
+  public SortedGroupByDecision getSortedGroupByDecision() {
+    return _sortedGroupByDecision;
+  }
+
+  /// Records the plan maker's decision; call once, while planning.
+  public void setSortedGroupByDecision(SortedGroupByDecision sortedGroupByDecision) {
+    _sortedGroupByDecision = sortedGroupByDecision;
+  }
+
+  /// Finished groups per block of the sorted streaming GROUP BY, see [SortedGroupByDecision#BLOCK_SIZE].
+  public int getSortedGroupByBlockSize() {
+    return _sortedGroupByDecision != null ? _sortedGroupByDecision.getBlockSize() : SortedGroupByDecision.BLOCK_SIZE;
   }
 
   public double getSortedSelectionMergeAutoMinSortedRatio() {

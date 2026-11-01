@@ -20,19 +20,14 @@ package org.apache.pinot.core.operator.combine;
 
 import com.google.common.annotations.VisibleForTesting;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Comparator;
-import java.util.HashSet;
 import java.util.List;
-import java.util.PriorityQueue;
-import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import javax.annotation.Nullable;
 import org.apache.pinot.common.request.context.ExpressionContext;
 import org.apache.pinot.common.request.context.OrderByExpressionContext;
 import org.apache.pinot.common.utils.DataSchema;
 import org.apache.pinot.core.common.Operator;
-import org.apache.pinot.core.operator.AcquireReleaseColumnsSegmentOperator;
 import org.apache.pinot.core.operator.ExplainAttributeBuilder;
 import org.apache.pinot.core.operator.blocks.results.BaseResultsBlock;
 import org.apache.pinot.core.operator.blocks.results.MetadataResultsBlock;
@@ -45,17 +40,13 @@ import org.apache.pinot.core.query.selection.SelectionOperatorUtils;
 import org.apache.pinot.core.query.utils.OrderByComparatorFactory;
 import org.apache.pinot.segment.spi.MutableSegment;
 import org.apache.pinot.segment.spi.datasource.DataSourceMetadata;
-import org.apache.pinot.spi.exception.QueryErrorCode;
-import org.apache.pinot.spi.exception.QueryErrorMessage;
 import org.apache.pinot.spi.query.QueryThreadContext;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /// Streaming, lazy combine operator for selection ORDER BY queries whose first order-by expression is an identifier.
 ///
 /// It performs an incremental k-way heap merge across the per-segment operators in `_operators`, returning
-/// globally sorted rows in bounded blocks. Each segment is exposed through a [SegmentCursor] that yields that
-/// segment's locally-sorted rows in order:
+/// globally sorted rows in bounded blocks. Each segment is exposed through a [SortedCursorMerge.Cursor] that yields
+/// that segment's locally-sorted rows in order:
 ///
 /// - Segments physically sorted on the first order-by column are backed by
 ///   [StreamingSelectionOrderByOperator], which is pulled lazily one run/block at a time.
@@ -63,7 +54,7 @@ import org.slf4j.LoggerFactory;
 ///   [SelectionResultsBlock]-producing operator such as `SelectionOrderByOperator`); the cursor reads that
 ///   one block and iterates its rows.
 ///
-/// A [PriorityQueue] of [SegmentCursor] ordered by the [OrderByComparatorFactory] comparator on
+/// A heap ([SortedCursorMerge]) of cursors ordered by the [OrderByComparatorFactory] comparator on
 /// each
 /// cursor's current head row drives the merge with an at-most-one-head-per-active-segment invariant (the heap holds the
 /// cursors themselves, never all rows, which would degenerate into a full heap-sort that materializes everything). Each
@@ -74,7 +65,7 @@ import org.slf4j.LoggerFactory;
 /// (ASC) / max value (DESC) reusing the `MinMaxValueContext` idea from
 /// [MinMaxValueBasedSelectionOrderByCombineOperator]. A cursor is only activated (its segment acquired and first
 /// block read) when the merge frontier reaches its min/max, so once `limit + offset` rows are emitted the
-/// remaining segments are never acquired or read. See [#activateEligibleCursors(SegmentCursor)] for the
+/// remaining segments are never acquired or read. See [#activateEligibleCursors(SortedCursorMerge.Cursor)] for the
 /// correctness argument.
 /// A consuming ([MutableSegment]) segment is always given no min/max and activates up front: its bounds are a snapshot
 /// that rows ingested before activation can outgrow, since its plan (and doc count) is only built at activation.
@@ -89,7 +80,7 @@ import org.slf4j.LoggerFactory;
 ///       See https://github.com/apache/pinot/issues/19924 (item B3)
 ///
 /// **Segment acquire/release lifecycle.** A cursor acquires its
-/// [AcquireReleaseColumnsSegmentOperator] on activation and releases it only when its child operator is fully
+/// `AcquireReleaseColumnsSegmentOperator` on activation and releases it only when its child operator is fully
 /// drained (acquire-on-activate / release-on-exhaust), rather than per run. This is intentional: the backing
 /// [StreamingSelectionOrderByOperator] retains a buffer-backed `ValueBlock` across `nextBlock()`
 /// calls in its tail-to-sort mode, so releasing between interleaved runs could read segment buffers after a release
@@ -119,8 +110,20 @@ import org.slf4j.LoggerFactory;
 /// is not thread-safe.
 @SuppressWarnings({"rawtypes", "unchecked"})
 public class StreamingSelectionOrderByCombineOperator extends BaseStreamingCombineOperator<SelectionResultsBlock> {
-  private static final Logger LOGGER = LoggerFactory.getLogger(StreamingSelectionOrderByCombineOperator.class);
   private static final String EXPLAIN_NAME = "COMBINE_SELECT_ORDERBY_STREAMING";
+
+  private static final SortedCursorMerge.BlockRows SELECTION_BLOCK_ROWS = new SortedCursorMerge.BlockRows() {
+    @Override
+    public DataSchema getDataSchema(BaseResultsBlock block) {
+      return ((SelectionResultsBlock) block).getDataSchema();
+    }
+
+    @Nullable
+    @Override
+    public List<Object[]> getRows(BaseResultsBlock block) {
+      return ((SelectionResultsBlock) block).getRows();
+    }
+  };
 
   private final boolean _asc;
   private final boolean _pruningEnabled;
@@ -132,23 +135,14 @@ public class StreamingSelectionOrderByCombineOperator extends BaseStreamingCombi
   /// Segments whose metadata marks the leading order-by column sorted; -1 when that expression is not a column
   private final int _numSortedSegments;
   private final Comparator<Object[]> _comparator;
-  private final SegmentCursor[] _sortedCursors;
-  private final PriorityQueue<SegmentCursor> _priorityQueue;
+  private final SortedCursorMerge _merge;
+  private final SortedCursorMerge.Cursor[] _sortedCursors;
 
   // Merge progress (single-threaded; mutated only by the consumer thread driving getNextBlock())
   private int _nextToActivate;
   private int _numRowsEmitted;
   private List<Object[]> _outputRows;
   private boolean _done;
-  /// Captured from the first child block seen; all child blocks share the same schema. Non-null by the time any rows
-  /// exist to emit: every streaming child emits at least one block carrying its schema, including a zero-match one.
-  private DataSchema _dataSchema;
-  /// Deduplicated MERGE_RESPONSE errors for segment blocks dropped on schema mismatch; null until the first mismatch
-  @Nullable
-  private Set<String> _dataSchemaMismatchErrors;
-  /// Subset of the above not yet attached to the terminal block; drained on attach
-  @Nullable
-  private List<String> _unreportedDataSchemaMismatchErrors;
 
   public StreamingSelectionOrderByCombineOperator(List<Operator> operators, QueryContext queryContext,
       ExecutorService executorService) {
@@ -183,12 +177,13 @@ public class StreamingSelectionOrderByCombineOperator extends BaseStreamingCombi
     // Build one cursor per segment operator and read its first order-by column min/max for lazy activation ordering.
     // Reading DataSourceMetadata does not touch column buffers, so no segment acquire is needed here (mirrors
     // MinMaxValueBasedSelectionOrderByCombineOperator).
-    _sortedCursors = new SegmentCursor[_numOperators];
+    _merge = new SortedCursorMerge(_comparator, StreamingSelectionOrderByCombineOperator::isStreamingOperator,
+        SELECTION_BLOCK_ROWS, _numOperators);
     int numSortedSegments = firstOrderByColumn != null ? 0 : -1;
     for (int i = 0; i < _numOperators; i++) {
       Operator<BaseResultsBlock> operator = _operators.get(i);
       if (firstOrderByColumn == null) {
-        _sortedCursors[i] = new SegmentCursor(operator, null, null);
+        _merge.addCursor(operator, null, null);
         continue;
       }
       DataSourceMetadata metadata =
@@ -211,46 +206,17 @@ public class StreamingSelectionOrderByCombineOperator extends BaseStreamingCombi
         minValue = null;
         maxValue = null;
       }
-      _sortedCursors[i] = new SegmentCursor(operator, minValue, maxValue);
+      _merge.addCursor(operator, minValue, maxValue);
       if (metadata.isSorted()) {
         numSortedSegments++;
       }
     }
     _numSortedSegments = numSortedSegments;
     if (firstOrderByColumn != null) {
-      sortCursorsByMinMax();
+      _merge.sortCursorsByBound(_asc);
     }
-
-    _priorityQueue = new PriorityQueue<>(Math.max(1, _numOperators),
-        (o1, o2) -> _comparator.compare(o1.currentHead(), o2.currentHead()));
+    _sortedCursors = _merge.getCursors();
     _outputRows = newOutputList();
-  }
-
-  /// Sorts the cursors so the merge can activate them lazily in frontier order: ascending by the column min value for
-  /// ASC, descending by the column max value for DESC. Cursors without a min/max are placed first because they must
-  /// always be processed (mirrors [MinMaxValueBasedSelectionOrderByCombineOperator]).
-  private void sortCursorsByMinMax() {
-    if (_asc) {
-      Arrays.sort(_sortedCursors, (o1, o2) -> {
-        if (o1._minValue == null) {
-          return o2._minValue == null ? 0 : -1;
-        }
-        if (o2._minValue == null) {
-          return 1;
-        }
-        return o1._minValue.compareTo(o2._minValue);
-      });
-    } else {
-      Arrays.sort(_sortedCursors, (o1, o2) -> {
-        if (o1._maxValue == null) {
-          return o2._maxValue == null ? 0 : -1;
-        }
-        if (o2._maxValue == null) {
-          return 1;
-        }
-        return o2._maxValue.compareTo(o1._maxValue);
-      });
-    }
   }
 
   @Override
@@ -307,7 +273,7 @@ public class StreamingSelectionOrderByCombineOperator extends BaseStreamingCombi
   protected BaseResultsBlock getNextBlock() {
     if (_done) {
       // Streaming mode: terminal metadata block after the last data block. Idempotent if called again.
-      return attachDataSchemaMismatchErrors(attachExecutionStats(new MetadataResultsBlock()));
+      return _merge.attachSchemaMismatchErrors(attachExecutionStats(new MetadataResultsBlock()));
     }
     try {
       long endTimeMs = _queryContext.getEndTimeMs();
@@ -318,7 +284,7 @@ public class StreamingSelectionOrderByCombineOperator extends BaseStreamingCombi
       //       advancing _numRowsEmitted by a run steps over the 0x1FFF mask in the termination check below, losing
       //       cancellation/pause/deadline observation; needs an unconditional check per run or a run-length clamp.
       //       See https://github.com/apache/pinot/issues/19924 (item B2)
-      SegmentCursor leader = null;
+      SortedCursorMerge.Cursor leader = null;
       while (_numRowsEmitted < _numRowsToKeep) {
         // The merge drains the heap on this thread and, for single-block cursors, may never re-enter a child operator.
         // Without this check nothing would observe cancellation, pause, or the query deadline for up to
@@ -329,18 +295,18 @@ public class StreamingSelectionOrderByCombineOperator extends BaseStreamingCombi
         // Choose the leader strictly AFTER activation, so a cursor just activated can win instead of being skipped
         // for one row.
         if (leader == null) {
-          leader = _priorityQueue.poll();
+          leader = _merge.poll();
           if (leader == null) {
             // All active cursors exhausted (and pruning guarantees the rest cannot contribute).
             break;
           }
         } else {
-          SegmentCursor top = _priorityQueue.peek();
-          if (top != null && _comparator.compare(leader.currentHead(), top.currentHead()) > 0) {
+          SortedCursorMerge.Cursor top = _merge.peek();
+          if (top != null && _merge.compare(leader, top) > 0) {
             // Lost the lead; hand it back and take the new minimum. A tie keeps the incumbent, reordering only rows
             // equal on every order-by expression -- the heap's own tie-breaking is arbitrary too.
-            _priorityQueue.offer(leader);
-            leader = _priorityQueue.poll();
+            _merge.offer(leader);
+            leader = _merge.poll();
           }
         }
         _outputRows.add(leader.currentHead());
@@ -359,7 +325,7 @@ public class StreamingSelectionOrderByCombineOperator extends BaseStreamingCombi
           // Restore the invariant before handing control back: at every entry to and exit from getNextBlock() the
           // heap holds all active cursors, so nothing else has to know about the retained leader.
           if (leader != null) {
-            _priorityQueue.offer(leader);
+            _merge.offer(leader);
           }
           return flushDataBlock();
         }
@@ -367,14 +333,14 @@ public class StreamingSelectionOrderByCombineOperator extends BaseStreamingCombi
       // Merge complete (limit reached or every cursor drained); the leader goes back so finish() sees a consistent
       // heap.
       if (leader != null) {
-        _priorityQueue.offer(leader);
+        _merge.offer(leader);
       }
       finish();
       if (!_outputRows.isEmpty()) {
         // The final partial data block; the next call returns the terminal metadata block.
         return flushDataBlock();
       }
-      return attachDataSchemaMismatchErrors(attachExecutionStats(new MetadataResultsBlock()));
+      return _merge.attachSchemaMismatchErrors(attachExecutionStats(new MetadataResultsBlock()));
     } catch (Exception e) {
       _done = true;
       releaseAllCursors();
@@ -402,23 +368,20 @@ public class StreamingSelectionOrderByCombineOperator extends BaseStreamingCombi
   /// outside the heap, so that row is the smaller of its head and the heap head: a bound past either is past the
   /// frontier. Checking the leader alone would overstate it whenever the leader has moved past the heap head, which
   /// happens both on entry (the leader just advanced) and within this loop (an activation offers a smaller head).
-  private void activateEligibleCursors(@Nullable SegmentCursor leader) {
+  private void activateEligibleCursors(@Nullable SortedCursorMerge.Cursor leader) {
     while (_nextToActivate < _sortedCursors.length) {
-      SegmentCursor cursor = _sortedCursors[_nextToActivate];
+      SortedCursorMerge.Cursor cursor = _sortedCursors[_nextToActivate];
       if (_pruningEnabled) {
-        Comparable bound = _asc ? cursor._minValue : cursor._maxValue;
+        Comparable bound = _asc ? cursor.getMinValue() : cursor.getMaxValue();
         // Re-read per iteration: each activation below can offer a smaller head into the heap.
-        SegmentCursor top = _priorityQueue.peek();
+        SortedCursorMerge.Cursor top = _merge.peek();
         // A null bound always activates, and with no candidate at all there is no frontier to prune against.
         if (bound != null && (leader != null || top != null) && sortsBeyond(bound, leader, top)) {
           break;
         }
       }
-      cursor.activate();
+      _merge.activate(cursor);
       _nextToActivate++;
-      if (cursor.currentHead() != null) {
-        _priorityQueue.offer(cursor);
-      }
     }
   }
 
@@ -433,7 +396,8 @@ public class StreamingSelectionOrderByCombineOperator extends BaseStreamingCombi
   /// emitted one -- only ties, interchangeable when column 0 is the whole sort key. Note this is *not*
   /// [MinMaxValueBasedSelectionOrderByCombineOperator]'s justification: its bound is a complete top-K's k-th
   /// row, this one is the live frontier. It changes which tied rows are returned, already documented as arbitrary.
-  private boolean sortsBeyond(Comparable bound, @Nullable SegmentCursor leader, @Nullable SegmentCursor top) {
+  private boolean sortsBeyond(Comparable bound, @Nullable SortedCursorMerge.Cursor leader,
+      @Nullable SortedCursorMerge.Cursor top) {
     Object leaderHead = leader != null ? leader.currentHead()[0] : null;
     Object topHead = top != null ? top.currentHead()[0] : null;
     if ((leader != null && leaderHead == null) || (top != null && topHead == null)) {
@@ -458,27 +422,16 @@ public class StreamingSelectionOrderByCombineOperator extends BaseStreamingCombi
   /// downstream send, so up to a block of rows per active cursor would otherwise stay reachable for nothing.
   private void finish() {
     _done = true;
-    for (SegmentCursor cursor : _sortedCursors) {
-      cursor.exhaust();
-    }
-    _priorityQueue.clear();
+    _merge.finish();
   }
 
   @VisibleForTesting
   int getNumCursorsHoldingRows() {
-    int numCursors = 0;
-    for (SegmentCursor cursor : _sortedCursors) {
-      if (cursor._rows != null) {
-        numCursors++;
-      }
-    }
-    return numCursors;
+    return _merge.getNumCursorsHoldingRows();
   }
 
   private void releaseAllCursors() {
-    for (SegmentCursor cursor : _sortedCursors) {
-      cursor.release();
-    }
+    _merge.releaseAll();
   }
 
   /// Returns the accumulated output rows as a sorted [SelectionResultsBlock] and resets the output buffer. The
@@ -487,194 +440,20 @@ public class StreamingSelectionOrderByCombineOperator extends BaseStreamingCombi
   private BaseResultsBlock flushDataBlock() {
     List<Object[]> rows = _outputRows;
     _outputRows = newOutputList();
-    // Rows only reach the output buffer through pullBlock(), which captures the schema before accepting any of them.
-    assert _dataSchema != null;
-    return new SelectionResultsBlock(_dataSchema, rows, _comparator, _queryContext);
+    // Rows only reach the output buffer through a cursor's pullBlock(), which captures the schema before accepting any.
+    DataSchema dataSchema = _merge.getDataSchema();
+    assert dataSchema != null;
+    return new SelectionResultsBlock(dataSchema, rows, _comparator, _queryContext);
   }
 
-  /// Records that a segment's block was dropped because its schema disagreed with the merge schema. Deduplicated by
-  /// message so a mid-reload table with many divergent segments cannot flood the response.
-  private void recordDataSchemaMismatch(@Nullable DataSchema mismatched) {
-    String errorMessage =
-        String.format("Data schema mismatch between merged block: %s and block to merge: %s, drop block to merge",
-            _dataSchema, mismatched);
-    // NOTE: This is segment level log, so log at debug level to prevent flooding the log.
-    LOGGER.debug(errorMessage);
-    if (_dataSchemaMismatchErrors == null) {
-      _dataSchemaMismatchErrors = new HashSet<>();
-      _unreportedDataSchemaMismatchErrors = new ArrayList<>();
-    }
-    if (_dataSchemaMismatchErrors.add(errorMessage)) {
-      _unreportedDataSchemaMismatchErrors.add(errorMessage);
-    }
-  }
-
-  /// Attaches the recorded mismatch errors to the terminal metadata block. Data blocks must not carry them: the
-  /// streaming instance response operator only streams a data block's rows and builds the server response from the
-  /// terminal block, and that response is where MSE and the gRPC streaming path read errors. Drained so a repeated
-  /// terminal call does not report them twice.
-  private <T extends BaseResultsBlock> T attachDataSchemaMismatchErrors(T block) {
-    if (_unreportedDataSchemaMismatchErrors != null && !_unreportedDataSchemaMismatchErrors.isEmpty()) {
-      for (String errorMessage : _unreportedDataSchemaMismatchErrors) {
-        block.addErrorMessage(QueryErrorMessage.safeMsg(QueryErrorCode.MERGE_RESPONSE, errorMessage));
-      }
-      _unreportedDataSchemaMismatchErrors.clear();
-    }
-    return block;
+  /// Whether `operator` (already unwrapped from any acquire/release wrapper) is the lazy streaming child.
+  private static boolean isStreamingOperator(Operator operator) {
+    return operator instanceof StreamingSelectionOrderByOperator;
   }
 
   private List<Object[]> newOutputList() {
     int capacity =
         Math.min(_blockSize, Math.min(_numRowsToKeep, SelectionOperatorUtils.MAX_ROW_HOLDER_INITIAL_CAPACITY));
     return new ArrayList<>(Math.max(1, capacity));
-  }
-
-  /// Iterates a single segment's locally-sorted rows, pulling blocks lazily from its operator. Streaming-backed cursors
-  /// loop until the operator returns `null`; single-block-backed cursors read exactly one block. The segment is
-  /// acquired on activation and released once exhausted or when the combine finishes (see
-  /// [StreamingSelectionOrderByCombineOperator]).
-  private class SegmentCursor {
-    private final Operator<BaseResultsBlock> _operator;
-    @Nullable
-    private final Comparable _minValue;
-    @Nullable
-    private final Comparable _maxValue;
-
-    private boolean _streamingChild;
-    private boolean _streamingChildResolved;
-    private List<Object[]> _rows;
-    private int _pos;
-    private boolean _acquired;
-    /// Cached current head (rows.get(pos)) so the hot heap comparator does not re-index per comparison
-    @Nullable
-    private Object[] _head;
-
-    SegmentCursor(Operator<BaseResultsBlock> operator, @Nullable Comparable minValue, @Nullable Comparable maxValue) {
-      _operator = operator;
-      _minValue = minValue;
-      _maxValue = maxValue;
-    }
-
-    /// Returns the current head row to be merged next, or `null` if not activated or exhausted.
-    @Nullable
-    Object[] currentHead() {
-      return _head;
-    }
-
-    /// Acquires the segment, resolves whether the child is the lazy streaming operator, and reads the first block.
-    /// After this call [#currentHead()] returns the first row, or `null` if the segment contributes
-    /// nothing.
-    void activate() {
-      acquireSegment();
-      if (!pullBlock()) {
-        exhaust();
-      }
-    }
-
-    /// Advances past the current head, pulling the next block lazily for streaming cursors. Releases the segment
-    /// when the cursor is exhausted; afterwards [#currentHead()] returns `null`.
-    void advance() {
-      _pos++;
-      if (_pos < _rows.size()) {
-        _head = _rows.get(_pos);
-        return;
-      }
-      // Current block drained: streaming cursors pull the next run/block; single-block cursors are done.
-      if (_streamingChild && pullBlock()) {
-        return;
-      }
-      exhaust();
-    }
-
-    /// Loads the next non-empty block of rows from the operator, capturing the combine-level data schema on first
-    /// sight. Returns `false` when the operator is exhausted (no more rows). Streaming-backed operators emit
-    /// one run/block per call and `null` when done; single-block operators emit a single block and must not be
-    /// called again afterwards, so an empty/null block from a single-block child is treated as exhausted.
-    ///
-    /// A block whose schema differs from the one already captured is dropped and reported, mirroring
-    /// [org.apache.pinot.core.operator.combine.merger.SelectionOrderByResultsBlockMerger]. Segments on a server
-    /// can disagree on schema mid-reload (a newly added column exists only in reloaded segments), and merging rows of
-    /// differing width under one schema would corrupt the result rather than fail. The cursor is exhausted rather than
-    /// skipping the one block, which drops the same unit the merger does: there, a block is a segment's whole result.
-    private boolean pullBlock() {
-      while (true) {
-        SelectionResultsBlock block = nextBlock();
-        if (block == null) {
-          return false;
-        }
-        if (_dataSchema == null) {
-          _dataSchema = block.getDataSchema();
-        } else if (!_dataSchema.equals(block.getDataSchema())) {
-          recordDataSchemaMismatch(block.getDataSchema());
-          return false;
-        }
-        List<Object[]> rows = block.getRows();
-        if (rows != null && !rows.isEmpty()) {
-          _rows = rows;
-          _pos = 0;
-          _head = rows.get(0);
-          return true;
-        }
-        // An empty (non-null) block: a streaming child emits one on a zero-match segment to deliver its schema, which
-        // the capture above has just taken. Keep pulling only for streaming children; a single-block child yields
-        // exactly one block, so treat it as exhausted.
-        if (!_streamingChild) {
-          return false;
-        }
-      }
-    }
-
-    private SelectionResultsBlock nextBlock() {
-      try {
-        SelectionResultsBlock block = (SelectionResultsBlock) _operator.nextBlock();
-        if (!_streamingChildResolved) {
-          // The call above materializes the wrapped child, so its type can be read without forcing a separate
-          // materializeChildOperator(). Resolved after the first pull rather than before it because that is the
-          // earliest point at which the child exists.
-          _streamingChild = isStreamingChild();
-          _streamingChildResolved = true;
-        }
-        return block;
-      } catch (RuntimeException e) {
-        throw wrapOperatorException(_operator, e);
-      }
-    }
-
-    /// Returns whether the underlying child operator is the lazy [StreamingSelectionOrderByOperator]. Must be
-    /// called after the first [Operator#nextBlock()], which is what materializes a wrapped child.
-    private boolean isStreamingChild() {
-      Operator underlying = _operator;
-      if (_operator instanceof AcquireReleaseColumnsSegmentOperator) {
-        // The child is materialized by AcquireReleaseColumnsSegmentOperator#getNextBlock() before it delegates, so it
-        // is non-null by the time we get here. Left unchecked deliberately: getChildOperators() returns
-        // List.of(child), which itself throws NullPointerException on a null element, so a refactor that breaks the
-        // invariant already fails there and an explicit check here would be unreachable.
-        underlying = ((AcquireReleaseColumnsSegmentOperator) _operator).getChildOperators().get(0);
-      }
-      return underlying instanceof StreamingSelectionOrderByOperator;
-    }
-
-    private void acquireSegment() {
-      if (_operator instanceof AcquireReleaseColumnsSegmentOperator) {
-        ((AcquireReleaseColumnsSegmentOperator) _operator).acquire();
-      }
-      _acquired = true;
-    }
-
-    /// Releases the segment if still held. Idempotent: safe to call from [#exhaust()] and combine cleanup.
-    private void release() {
-      if (_acquired) {
-        if (_operator instanceof AcquireReleaseColumnsSegmentOperator) {
-          ((AcquireReleaseColumnsSegmentOperator) _operator).release();
-        }
-        _acquired = false;
-      }
-    }
-
-    private void exhaust() {
-      release();
-      _rows = null;
-      _head = null;
-    }
   }
 }

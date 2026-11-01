@@ -162,6 +162,7 @@ public class SortedRecordTable extends BaseTable {
         case FUNNELCOUNT:
         case FUNNELMATCHSTEP:
         case FUNNELMAXSTEP:
+        case FUNNELMAXSTEPWITHENTRY:
           return true;
         default:
           break;
