@@ -21,6 +21,7 @@ package org.apache.pinot.core.operator.combine;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -417,11 +418,16 @@ public class StreamingSortedGroupByCombineOperatorTest {
   }
 
   /// Canonical form of a row list, order-insensitive, typed so a boxing or stored-type regression is visible.
+  /// Renders a cell with value equality; array cells (e.g. the `long[]` final result of a funnel) by their elements.
+  private static String render(Object cell) {
+    return cell != null && cell.getClass().isArray() ? Arrays.deepToString(new Object[]{cell}) : String.valueOf(cell);
+  }
+
   private static List<String> canonical(List<Object[]> rows) {
     return rows.stream().map(row -> {
       StringBuilder sb = new StringBuilder();
       for (Object cell : row) {
-        sb.append(cell == null ? "null" : cell.getClass().getSimpleName() + ":" + cell).append('|');
+        sb.append(cell == null ? "null" : cell.getClass().getSimpleName() + ":" + render(cell)).append('|');
       }
       return sb.toString();
     }).sorted().collect(Collectors.toList());
@@ -978,7 +984,7 @@ public class StreamingSortedGroupByCombineOperatorTest {
         if (cell instanceof PriorityQueue) {
           List<Object> events = new ArrayList<>((PriorityQueue<?>) cell);
           events.sort(null);
-          canonical[1 + i] = events + " -> " + functions[i].extractFinalResult(cell);
+          canonical[1 + i] = events + " -> " + render(functions[i].extractFinalResult(cell));
         }
       }
       rows.add(canonical);
@@ -1032,7 +1038,7 @@ public class StreamingSortedGroupByCombineOperatorTest {
     Result final1 = run(_funnelSegments, "SET sortedGroupByMode='ON'; SET serverReturnFinalResult=true; "
         + "SELECT key, FUNNEL_MAX_STEP_WITH_ENTRY(val, 60, 3, other = 1, other = 2, other = 3) FROM testTable "
         + "GROUP BY key" + BIG_LIMIT, 0);
-    assertTrue(final1._rows.stream().map(row -> row[1]).distinct().count() >= 5,
+    assertTrue(final1._rows.stream().map(row -> render(row[1])).distinct().count() >= 5,
         "Expected several distinct [maxStep, entry] results: " + canonicalFunnel(final1));
   }
 

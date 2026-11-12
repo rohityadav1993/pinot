@@ -18,7 +18,6 @@
  */
 package org.apache.pinot.core.query.aggregation.function.funnel.window;
 
-import it.unimi.dsi.fastutil.longs.LongArrayList;
 import java.util.List;
 import java.util.PriorityQueue;
 import javax.annotation.Nullable;
@@ -39,7 +38,7 @@ import org.apache.pinot.segment.spi.AggregationFunctionType;
 /// The intermediate result, its serialization, `merge()`, `fillWindow()`, the per-window step logic and the window
 /// scan (`findMaxStep`) are the ordered-funnel base's, shared with `FUNNEL_MAX_STEP`. Because both values come from one
 /// scan, they always describe the same chain. Instances are stateless after construction and thread-safe.
-public class FunnelMaxStepWithEntryAggregationFunction extends FunnelBaseAggregationFunction<LongArrayList> {
+public class FunnelMaxStepWithEntryAggregationFunction extends FunnelBaseAggregationFunction<long[]> {
   /// Placeholder for the entry timestamp when no step was reached.
   public static final long NO_ENTRY = MaxStep.NO_ENTRY;
 
@@ -58,19 +57,19 @@ public class FunnelMaxStepWithEntryAggregationFunction extends FunnelBaseAggrega
   }
 
   @Override
-  public LongArrayList extractFinalResult(@Nullable PriorityQueue<FunnelStepEvent> stepEvents) {
+  public long[] extractFinalResult(@Nullable PriorityQueue<FunnelStepEvent> stepEvents) {
     MaxStep maxStep = findMaxStep(stepEvents);
-    return LongArrayList.wrap(new long[]{maxStep.getStep(), maxStep.getEntryTimestamp()});
+    return new long[]{maxStep.getStep(), maxStep.getEntryTimestamp()};
   }
 
   /// Keeps the deeper result; on equal depth keeps the earlier entry.
   @Override
-  public LongArrayList mergeFinalResult(LongArrayList finalResult1, LongArrayList finalResult2) {
-    long step1 = finalResult1.getLong(0);
-    long step2 = finalResult2.getLong(0);
+  public long[] mergeFinalResult(long[] finalResult1, long[] finalResult2) {
+    long step1 = finalResult1[0];
+    long step2 = finalResult2[0];
     if (step1 != step2) {
       return step1 > step2 ? finalResult1 : finalResult2;
     }
-    return finalResult1.getLong(1) <= finalResult2.getLong(1) ? finalResult1 : finalResult2;
+    return finalResult1[1] <= finalResult2[1] ? finalResult1 : finalResult2;
   }
 }

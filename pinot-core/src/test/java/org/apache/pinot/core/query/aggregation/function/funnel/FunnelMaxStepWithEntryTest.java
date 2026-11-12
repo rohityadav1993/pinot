@@ -18,12 +18,17 @@
  */
 package org.apache.pinot.core.query.aggregation.function.funnel;
 
-import it.unimi.dsi.fastutil.longs.LongArrayList;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.PriorityQueue;
+import org.apache.pinot.common.datatable.DataTable;
 import org.apache.pinot.common.request.Literal;
 import org.apache.pinot.common.request.context.ExpressionContext;
+import org.apache.pinot.common.utils.DataSchema;
+import org.apache.pinot.common.utils.DataSchema.ColumnDataType;
+import org.apache.pinot.core.common.datatable.DataTableBuilder;
+import org.apache.pinot.core.common.datatable.DataTableBuilderFactory;
+import org.apache.pinot.core.common.datatable.DataTableBuilderUtils;
 import org.apache.pinot.core.query.aggregation.function.funnel.window.FunnelMaxStepAggregationFunction;
 import org.apache.pinot.core.query.aggregation.function.funnel.window.FunnelMaxStepWithEntryAggregationFunction;
 import org.testng.annotations.DataProvider;
@@ -98,8 +103,8 @@ public class FunnelMaxStepWithEntryTest {
     FunnelMaxStepWithEntryAggregationFunction withEntry =
         new FunnelMaxStepWithEntryAggregationFunction(args(numSteps, extra), false);
     FunnelMaxStepAggregationFunction maxStep = new FunnelMaxStepAggregationFunction(args(numSteps, extra), false);
-    LongArrayList result = withEntry.extractFinalResult(events);
-    assertEquals(result, LongArrayList.wrap(new long[]{expectedStep, expectedEntry}));
+    long[] result = withEntry.extractFinalResult(events);
+    assertEquals(result, new long[]{expectedStep, expectedEntry});
     assertEquals((int) maxStep.extractFinalResult(events), expectedStep);
     // the input accumulator is not consumed
     assertEquals(withEntry.extractFinalResult(events), result);
@@ -108,7 +113,7 @@ public class FunnelMaxStepWithEntryTest {
   @Test
   public void testNullIntermediate() {
     FunnelMaxStepWithEntryAggregationFunction f = new FunnelMaxStepWithEntryAggregationFunction(args(2), false);
-    assertEquals(f.extractFinalResult(null), LongArrayList.wrap(new long[]{0, MIN}));
+    assertEquals(f.extractFinalResult(null), new long[]{0, MIN});
   }
 
   @Test
@@ -116,15 +121,32 @@ public class FunnelMaxStepWithEntryTest {
     FunnelMaxStepWithEntryAggregationFunction f = new FunnelMaxStepWithEntryAggregationFunction(args(2), false);
     PriorityQueue<FunnelStepEvent> a = events(new long[]{10, 0});
     PriorityQueue<FunnelStepEvent> b = events(new long[]{20, 1}, new long[]{500, 0}, new long[]{510, 1});
-    assertEquals(f.extractFinalResult(f.merge(a, b)), LongArrayList.wrap(new long[]{2, 10}));
+    assertEquals(f.extractFinalResult(f.merge(a, b)), new long[]{2, 10});
   }
 
   @Test
   public void testMergeFinalResult() {
     FunnelMaxStepWithEntryAggregationFunction f = new FunnelMaxStepWithEntryAggregationFunction(args(3), false);
-    assertEquals(f.mergeFinalResult(LongArrayList.wrap(new long[]{1, 5}), LongArrayList.wrap(new long[]{2, 9})),
-        LongArrayList.wrap(new long[]{2, 9}));
-    assertEquals(f.mergeFinalResult(LongArrayList.wrap(new long[]{2, 9}), LongArrayList.wrap(new long[]{2, 5})),
-        LongArrayList.wrap(new long[]{2, 5}));
+    assertEquals(f.mergeFinalResult(new long[]{1, 5}, new long[]{2, 9}),
+        new long[]{2, 9});
+    assertEquals(f.mergeFinalResult(new long[]{2, 9}, new long[]{2, 5}),
+        new long[]{2, 5});
+  }
+
+  /// The final result is the stored form of the LONG_ARRAY column, so the leaf can serialize it as is, e.g. when the
+  /// sorted streaming GROUP BY returns final results to the MSE.
+  @Test
+  public void testFinalResultSerializesAsLongArrayColumn()
+      throws Exception {
+    FunnelMaxStepWithEntryAggregationFunction f = new FunnelMaxStepWithEntryAggregationFunction(args(2), false);
+    assertEquals(f.getFinalResultColumnType(), ColumnDataType.LONG_ARRAY);
+    Object finalResult = f.extractFinalResult(events(new long[]{10, 0}, new long[]{20, 1}));
+    DataSchema schema = new DataSchema(new String[]{"f"}, new ColumnDataType[]{ColumnDataType.LONG_ARRAY});
+    DataTableBuilder builder = DataTableBuilderFactory.getDataTableBuilder(schema);
+    builder.startRow();
+    DataTableBuilderUtils.setColumn(builder, ColumnDataType.LONG_ARRAY, 0, finalResult);
+    builder.finishRow();
+    DataTable dataTable = builder.build();
+    assertEquals(dataTable.getLongArray(0, 0), new long[]{2, 10});
   }
 }
