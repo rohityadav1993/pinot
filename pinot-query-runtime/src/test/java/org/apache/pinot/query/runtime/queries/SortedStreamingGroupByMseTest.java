@@ -22,12 +22,15 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import javax.annotation.Nullable;
+import org.apache.commons.lang3.exception.ExceptionUtils;
 import org.apache.pinot.common.response.broker.BrokerResponseNative;
 import org.apache.pinot.common.response.broker.ResultTable;
 import org.apache.pinot.queries.BaseQueriesTest;
@@ -35,6 +38,9 @@ import org.apache.pinot.query.QueryEnvironmentTestBase;
 import org.apache.pinot.query.QueryServerEnclosure;
 import org.apache.pinot.query.mailbox.MailboxService;
 import org.apache.pinot.query.planner.physical.DispatchablePlanFragment;
+import org.apache.pinot.query.planner.plannode.PlanNode;
+import org.apache.pinot.query.planner.plannode.TableScanNode;
+import org.apache.pinot.query.planner.plannode.UnnestNode;
 import org.apache.pinot.query.routing.QueryServerInstance;
 import org.apache.pinot.query.runtime.MultiStageStatsTreeBuilder;
 import org.apache.pinot.query.runtime.operator.LeafOperator;
@@ -66,7 +72,8 @@ import org.testng.annotations.Test;
 ///   layout plan shape (b) (`is_partitioned_by_group_by_keys`) relies on.
 ///
 /// Oracles: H2 for the generic GROUP BY, the existing hash GROUP BY (`sortedGroupByMode` off) plus a by-construction
-/// expectation for the ordered funnel (H2 has no funnel function), and SSE `FUNNEL_COUNT` for the unordered bridge.
+/// expectation for the ordered funnel and for the attempts query (H2 has no funnel function), and SSE `FUNNEL_COUNT`
+/// for the unordered bridge.
 ///
 /// Thread-safety: the tests share the servers and H2 connection and are not meant to run concurrently.
 public class SortedStreamingGroupByMseTest extends QueryRunnerTestBase {
@@ -83,6 +90,15 @@ public class SortedStreamingGroupByMseTest extends QueryRunnerTestBase {
   /// Two segments per server for the exclusive layout, four segments (two per server) for the spread layout.
   private static final int NUM_SEGMENTS_SPREAD = 4;
 
+  /// The attempts users (ADR 0014) live far after the funnel users, so the ordered-funnel queries (which scan
+  /// `[0, RANGE_HI + WINDOW_MS]`) never see them, and the attempts query (which scans `[ATTEMPT_LO, ATTEMPT_HI +
+  /// ATTEMPT_CW)`) never sees the funnel users. Both are multiples of [#BUCKET_MS].
+  private static final long ATTEMPT_LO = TS_BASE + 1_000_000L;
+  private static final int NUM_ATTEMPT_BUCKETS = 5;
+  private static final long ATTEMPT_HI = ATTEMPT_LO + NUM_ATTEMPT_BUCKETS * BUCKET_MS;
+  private static final long ATTEMPT_CW = 100;
+  private static final int FIRST_ATTEMPT_USER = 1_000;
+
   private static final String GROUP_BY_HINT_B = "/*+ aggOptions(is_partitioned_by_group_by_keys='true') */ ";
 
   private final List<ImmutableSegment> _server1Segments = new ArrayList<>();
@@ -93,6 +109,12 @@ public class SortedStreamingGroupByMseTest extends QueryRunnerTestBase {
   private final Map<Long, long[]> _expectedFunnel = new TreeMap<>();
   /// Expected number of users in the scanned range by deepest step (1 to 3), built from the scenario of each user.
   private final Map<Long, Long> _expectedUsersByDepth = new TreeMap<>();
+
+  /// Expected `[bucket, step1Attempts, step2Attempts, step3Attempts]` of the attempts query, by bucket, built from
+  /// the hand-specified attempts of every attempts user (see [#addAttemptUsers]).
+  private final Map<Long, long[]> _expectedAttempts = new TreeMap<>();
+  /// Expected number of attempts by depth (1 to 3), same source.
+  private final Map<Long, Long> _expectedAttemptsByDepth = new TreeMap<>();
 
   private static Schema schema(String name) {
     return new Schema.SchemaBuilder().setSchemaName(name)
@@ -132,7 +154,8 @@ public class SortedStreamingGroupByMseTest extends QueryRunnerTestBase {
     return String.format("u%03d", user);
   }
 
-  /// Builds the events of every user from its scenario (user index modulo 6), and records the expected funnel of the
+  /// Builds the events of every user from its scenario (user index modulo 6; the attempts users come from
+  /// [#addAttemptUsers]), and records the expected funnel of the
   /// users in the scanned range. `a`, `b`, `c` are the funnel steps and `x` matches none of them.
   /// - 0: a, b, c within the window (3 steps), plus noise
   /// - 1: a, b (2 steps), plus noise
@@ -200,7 +223,161 @@ public class SortedStreamingGroupByMseTest extends QueryRunnerTestBase {
         _expectedUsersByDepth.merge((long) depth, 1L, Long::sum);
       }
     }
+    addAttemptUsers(events);
     return events;
+  }
+
+  /// Records one expected attempt `(start, depth)` if the query reports it: starts in `[ATTEMPT_LO, ATTEMPT_HI)`.
+  /// The ones outside are scanned (or, before `ATTEMPT_LO`, not) but dropped by the outer filter.
+  private void expectAttempt(long start, int depth) {
+    if (start < ATTEMPT_LO || start >= ATTEMPT_HI) {
+      return;
+    }
+    long[] counts = _expectedAttempts.computeIfAbsent(start / BUCKET_MS, b -> new long[]{b, 0, 0, 0});
+    for (int step = 1; step <= depth; step++) {
+      counts[step]++;
+    }
+    _expectedAttemptsByDepth.merge((long) depth, 1L, Long::sum);
+  }
+
+  /// Adds the users of the attempts query (`FUNNEL_ATTEMPTS_ANY_ORDER`, window [#ATTEMPT_CW], steps a, b, c, `x`
+  /// matches none) with the attempts each one has by construction. `t` is the user's anchor, offsets are in ms.
+  ///
+  /// Scenarios 0 to 8 are replicated in every bucket, a different number of times each, so the per-bucket counts
+  /// differ. Scenarios 9 to 15 sit at the edges of the scanned range `[ATTEMPT_LO, ATTEMPT_HI + ATTEMPT_CW)`.
+  ///
+  /// - 0 several attempts: a b c at 0, a b at 200, a at 400 and a b c at 9_500 (next bucket): (0,3) (200,2) (400,1)
+  ///   (9_500,3)
+  /// - 1 absorbed entry steps: a@0, a@30, a@60, b@70, a@99, c@80: one attempt (0,3)
+  /// - 2 out of order: a@0, c@10, b@20: (0,3); steps 2..N count in any order
+  /// - 3 event at exactly start + cw: a@0, b@50, c@100: (0,2) (c is outside the attempt and is not an entry step)
+  /// - 4 entry step at start + cw opens the next attempt: a@0, b@10, a@100, c@110: (0,2) (100,1)
+  /// - 5 no entry step: b, c, b, c: no attempt
+  /// - 6 steps before the entry step are ignored: c@-20, b@-10, a@0: (0,1)
+  /// - 7 later step 1 inside an attempt does not extend it: a@0, a@90, b@150: (0,1) (150 is past the window of the
+  ///   first attempt, and b is not an entry step)
+  /// - 8 two attempts in one bucket: a@0, b@5, a@300, b@305, c@310: (0,2) (300,3)
+  /// - 9 entry step exactly at `ATTEMPT_LO`: a@lo, b@lo+10: (lo,2)
+  /// - 10 lookback is not applied: a@lo-10 (before the scanned range, not seen), a@lo+50, b@lo+60: (lo+50,2)
+  /// - 11 attempt just before `hi` reaches into `[hi, hi + cw)`: a@hi-1, b@hi+50, c@hi+98: (hi-1,3)
+  /// - 12 the last instant of that attempt: a@hi-1, b@hi+98, c@hi+99 (= start + cw, outside): (hi-1,2)
+  /// - 13 attempt starting at `hi`, dropped: a@hi, b@hi+10, c@hi+20: no reported attempt
+  /// - 14 attempt starting in `(hi, hi + cw)`, dropped: a@hi+10, b@hi+20: no reported attempt
+  /// - 15 an attempt before `hi` and a dropped one after it: a@hi-50, b@hi-40, a@hi+60, b@hi+70: (hi-50,2); the second
+  ///   pair is past the first window (ends hi+50) and opens an attempt that is dropped
+  private void addAttemptUsers(List<Event> events) {
+    int user = FIRST_ATTEMPT_USER;
+    for (int bucket = 0; bucket < NUM_ATTEMPT_BUCKETS; bucket++) {
+      long t = ATTEMPT_LO + bucket * BUCKET_MS + 1_000;
+      for (int scenario = 0; scenario <= 8; scenario++) {
+        int copies = 1 + (bucket + scenario) % 3;
+        for (int copy = 0; copy < copies; copy++) {
+          addAttemptScenario(events, user++, scenario, t + 3L * copy);
+        }
+      }
+    }
+    for (int scenario = 9; scenario <= 15; scenario++) {
+      addAttemptScenario(events, user++, scenario, ATTEMPT_HI);
+    }
+  }
+
+  private void addAttemptScenario(List<Event> events, int user, int scenario, long t) {
+    long lo = ATTEMPT_LO;
+    long hi = ATTEMPT_HI;
+    String[] types;
+    long[] offsets;
+    switch (scenario) {
+      case 0:
+        types = new String[]{"a", "b", "c", "a", "b", "a", "a", "b", "c"};
+        offsets = new long[]{0, 10, 20, 200, 210, 400, 9_500, 9_510, 9_520};
+        expectAttempt(t, 3);
+        expectAttempt(t + 200, 2);
+        expectAttempt(t + 400, 1);
+        expectAttempt(t + 9_500, 3);
+        break;
+      case 1:
+        types = new String[]{"a", "a", "a", "b", "a", "c"};
+        offsets = new long[]{0, 30, 60, 70, 99, 80};
+        expectAttempt(t, 3);
+        break;
+      case 2:
+        types = new String[]{"a", "c", "b"};
+        offsets = new long[]{0, 10, 20};
+        expectAttempt(t, 3);
+        break;
+      case 3:
+        types = new String[]{"a", "b", "c"};
+        offsets = new long[]{0, 50, 100};
+        expectAttempt(t, 2);
+        break;
+      case 4:
+        types = new String[]{"a", "b", "a", "c"};
+        offsets = new long[]{0, 10, 100, 110};
+        expectAttempt(t, 2);
+        expectAttempt(t + 100, 1);
+        break;
+      case 5:
+        types = new String[]{"b", "c", "b", "c"};
+        offsets = new long[]{0, 10, 20, 30};
+        break;
+      case 6:
+        types = new String[]{"c", "b", "a"};
+        offsets = new long[]{-20, -10, 0};
+        expectAttempt(t, 1);
+        break;
+      case 7:
+        types = new String[]{"a", "a", "b"};
+        offsets = new long[]{0, 90, 150};
+        expectAttempt(t, 1);
+        break;
+      case 8:
+        types = new String[]{"a", "b", "a", "b", "c"};
+        offsets = new long[]{0, 5, 300, 305, 310};
+        expectAttempt(t, 2);
+        expectAttempt(t + 300, 3);
+        break;
+      case 9:
+        t = lo;
+        types = new String[]{"a", "b"};
+        offsets = new long[]{0, 10};
+        expectAttempt(lo, 2);
+        break;
+      case 10:
+        t = lo;
+        types = new String[]{"a", "a", "b"};
+        offsets = new long[]{-10, 50, 60};
+        expectAttempt(lo + 50, 2);
+        break;
+      case 11:
+        types = new String[]{"a", "b", "c"};
+        offsets = new long[]{-1, 50, 98};
+        expectAttempt(hi - 1, 3);
+        break;
+      case 12:
+        types = new String[]{"a", "b", "c"};
+        offsets = new long[]{-1, 98, 99};
+        expectAttempt(hi - 1, 2);
+        break;
+      case 13:
+        types = new String[]{"a", "b", "c"};
+        offsets = new long[]{0, 10, 20};
+        expectAttempt(hi, 3);
+        break;
+      case 14:
+        types = new String[]{"a", "b"};
+        offsets = new long[]{10, 20};
+        expectAttempt(hi + 10, 2);
+        break;
+      default:
+        types = new String[]{"a", "b", "a", "b"};
+        offsets = new long[]{-50, -40, 60, 70};
+        expectAttempt(hi - 50, 2);
+        expectAttempt(hi + 60, 2);
+        break;
+    }
+    for (int i = 0; i < types.length; i++) {
+      events.add(new Event(user, types[i], t + offsets[i], user + i));
+    }
   }
 
   @BeforeClass
@@ -318,6 +495,34 @@ public class SortedStreamingGroupByMseTest extends QueryRunnerTestBase {
         + "event_type = 'c', 'STRICT_ORDER') AS r FROM " + table + " WHERE ts BETWEEN 0 AND " + (RANGE_HI + WINDOW_MS)
         + " GROUP BY correlation_id) f "
         + "CROSS JOIN UNNEST(f.r) AS u(v) WHERE u.v BETWEEN 1 AND 3 GROUP BY 1";
+  }
+
+  /// The canonical attempts query of ADR 0014 section 5: half-open ranges, entries in `[ATTEMPT_LO, ATTEMPT_HI)`,
+  /// scan `[ATTEMPT_LO, ATTEMPT_HI + ATTEMPT_CW)`.
+  private static String attemptsQuery(String table, boolean partitionedByKeys) {
+    return "SELECT funnelAttemptStart(u.a) / " + BUCKET_MS + " AS bucket, "
+        + "SUM(CASE WHEN funnelAttemptDepth(u.a) >= 1 THEN 1 ELSE 0 END) AS step1_attempts, "
+        + "SUM(CASE WHEN funnelAttemptDepth(u.a) >= 2 THEN 1 ELSE 0 END) AS step2_attempts, "
+        + "SUM(CASE WHEN funnelAttemptDepth(u.a) >= 3 THEN 1 ELSE 0 END) AS step3_attempts "
+        + "FROM (SELECT " + (partitionedByKeys ? GROUP_BY_HINT_B : "") + "correlation_id, "
+        + "FUNNEL_ATTEMPTS_ANY_ORDER(ts, " + ATTEMPT_CW + ", 3, event_type = 'a', event_type = 'b', "
+        + "event_type = 'c') AS attempts FROM " + table + " WHERE ts >= " + ATTEMPT_LO + " AND ts < "
+        + (ATTEMPT_HI + ATTEMPT_CW) + " GROUP BY correlation_id) f "
+        + "CROSS JOIN UNNEST(f.attempts) AS u(a) "
+        + "WHERE funnelAttemptStart(u.a) >= " + ATTEMPT_LO + " AND funnelAttemptStart(u.a) < " + ATTEMPT_HI
+        + " GROUP BY 1";
+  }
+
+  /// Same attempts, counted by depth, to catch a wrong depth that cancels out in the per-step sums.
+  private static String attemptsByDepthQuery(String table, boolean partitionedByKeys) {
+    return "SELECT funnelAttemptDepth(u.a) AS depth, COUNT(*) AS attempts "
+        + "FROM (SELECT " + (partitionedByKeys ? GROUP_BY_HINT_B : "") + "correlation_id, "
+        + "FUNNEL_ATTEMPTS_ANY_ORDER(ts, " + ATTEMPT_CW + ", 3, event_type = 'a', event_type = 'b', "
+        + "event_type = 'c') AS attempts FROM " + table + " WHERE ts >= " + ATTEMPT_LO + " AND ts < "
+        + (ATTEMPT_HI + ATTEMPT_CW) + " GROUP BY correlation_id) f "
+        + "CROSS JOIN UNNEST(f.attempts) AS u(a) "
+        + "WHERE funnelAttemptStart(u.a) >= " + ATTEMPT_LO + " AND funnelAttemptStart(u.a) < " + ATTEMPT_HI
+        + " GROUP BY 1";
   }
 
   private static String genericQuery(String table, boolean partitionedByKeys) {
@@ -489,6 +694,128 @@ public class SortedStreamingGroupByMseTest extends QueryRunnerTestBase {
       }
       assertEngaged(options(false, "ON") + unnestFunnelQuery(table, partitionedByKeys));
     }
+  }
+
+  // --------------------------------------------------------------------------
+  // Canonical attempts query (ADR 0014 sections 5 and 6)
+  // --------------------------------------------------------------------------
+
+  @DataProvider(name = "attemptLayouts")
+  public Object[][] attemptLayouts() {
+    // {table, partitionedByKeys}: (b) and (a) on the exclusive layout, (a) on the spread layout.
+    return new Object[][]{{EXCLUSIVE, true}, {EXCLUSIVE, false}, {SPREAD, false}};
+  }
+
+  private List<List<Long>> expectedAttemptRows() {
+    List<List<Long>> rows = new ArrayList<>();
+    for (long[] counts : _expectedAttempts.values()) {
+      rows.add(Arrays.asList(counts[0], counts[1], counts[2], counts[3]));
+    }
+    rows.sort(Comparator.comparing(Object::toString));
+    return rows;
+  }
+
+  private List<List<Long>> expectedAttemptsByDepthRows() {
+    List<List<Long>> rows = new ArrayList<>();
+    _expectedAttemptsByDepth.forEach((depth, attempts) -> rows.add(Arrays.asList(depth, attempts)));
+    rows.sort(Comparator.comparing(Object::toString));
+    return rows;
+  }
+
+  /// The expectation is not vacuous: every bucket and every depth is present, and the per-bucket counts differ.
+  @Test
+  public void testAttemptsExpectationCoversEveryBucketAndDepth() {
+    Assert.assertEquals(_expectedAttempts.size(), NUM_ATTEMPT_BUCKETS,
+        "expected one entry per bucket of the range: " + _expectedAttempts);
+    Assert.assertEquals(_expectedAttemptsByDepth.keySet(), Set.of(1L, 2L, 3L));
+    long distinct = _expectedAttempts.values().stream().map(c -> Arrays.toString(Arrays.copyOfRange(c, 1, 4)))
+        .distinct().count();
+    Assert.assertTrue(distinct > 1, "buckets should not all expect the same counts: " + _expectedAttempts);
+  }
+
+  /// The canonical attempts query, sorted streaming GROUP BY on, default planner: plan shape (b) and (a) on the
+  /// exclusive layout, plan shape (a) on the spread layout. Matches the by-construction expectation and the result
+  /// with the streaming GROUP BY off (the oracle), by step and by depth, and the leaf reports engagement.
+  @Test(dataProvider = "attemptLayouts")
+  public void testAttemptsQueryMatchesExpectation(String table, boolean partitionedByKeys) {
+    String on = options(false, "ON") + attemptsQuery(table, partitionedByKeys);
+    String off = options(false, "OFF") + attemptsQuery(table, partitionedByKeys);
+    List<List<Long>> actual = longRows(run(on).getResultTable());
+    Assert.assertEquals(actual, expectedAttemptRows(), table + ", hint " + partitionedByKeys);
+    Assert.assertEquals(longRows(run(off).getResultTable()), actual, "OFF (hash GROUP BY) is the oracle");
+
+    String byDepthOn = options(false, "ON") + attemptsByDepthQuery(table, partitionedByKeys);
+    String byDepthOff = options(false, "OFF") + attemptsByDepthQuery(table, partitionedByKeys);
+    List<List<Long>> byDepth = longRows(run(byDepthOn).getResultTable());
+    Assert.assertEquals(byDepth, expectedAttemptsByDepthRows(), table + ", hint " + partitionedByKeys);
+    Assert.assertEquals(longRows(run(byDepthOff).getResultTable()), byDepth);
+
+    assertEngaged(on);
+  }
+
+  /// The plan has exactly one leaf stage (the one with the table scan) and one `UNNEST`. Under (b) `UNNEST` runs in the
+  /// leaf stage (no array crosses the network); under (a) it runs in a stage above the final aggregate. The leaf is
+  /// below the stage that holds the outer aggregate, so its stats are read through the stage 1 tree, as
+  /// `assertEngaged` does for every query here.
+  @Test(dataProvider = "attemptLayouts")
+  public void testAttemptsQueryPlanHasUnnestAndLeafStage(String table, boolean partitionedByKeys) {
+    String sql = options(false, "ON") + attemptsQuery(table, partitionedByKeys);
+    Map<Integer, DispatchablePlanFragment> stages = planQuery(sql).getQueryPlan().getQueryStageMap();
+    List<Integer> leafStages = new ArrayList<>();
+    List<Integer> unnestStages = new ArrayList<>();
+    stages.forEach((id, fragment) -> {
+      PlanNode root = fragment.getPlanFragment().getFragmentRoot();
+      if (!findNodes(root, TableScanNode.class).isEmpty()) {
+        leafStages.add(id);
+      }
+      unnestStages.addAll(Collections.nCopies(findNodes(root, UnnestNode.class).size(), id));
+    });
+    Assert.assertEquals(leafStages.size(), 1, "expected one leaf stage: " + leafStages);
+    Assert.assertEquals(unnestStages.size(), 1, "expected one UNNEST: " + unnestStages);
+    Assert.assertEquals(unnestStages.get(0).equals(leafStages.get(0)), partitionedByKeys,
+        "UNNEST should be in the leaf stage exactly under plan shape (b): leaf " + leafStages + ", UNNEST "
+            + unnestStages);
+    assertEngaged(sql);
+  }
+
+  /// Documented hazard of plan shape (b), as for the ordered funnel: on the spread layout it is not asserted to
+  /// match; it is asserted not to, so a change in that behaviour is noticed (and the option docs revisited).
+  @Test
+  public void testAttemptsPlanShapeBOnNonExclusiveLayoutIsWrong() {
+    List<List<Long>> expected = expectedAttemptRows();
+    for (String mode : List.of("OFF", "ON")) {
+      List<List<Long>> actual =
+          longRows(run(options(false, mode) + attemptsQuery(SPREAD, true)).getResultTable());
+      Assert.assertNotEquals(actual, expected,
+          "plan shape (b) is documented to be wrong when partitions are not exclusive to one server (mode " + mode
+              + ")");
+    }
+  }
+
+  /// Pins current behaviour (ADR 0014 section 6, same guard as `UnnestSqlPlannerTest`): the physical optimizer
+  /// cannot plan `UNNEST`, so the attempts query fails at planning. If this starts planning, revisit the docs
+  /// ("default planner only").
+  @Test(dataProvider = "attemptLayouts")
+  public void testAttemptsQueryFailsWithPhysicalOptimizer(String table, boolean partitionedByKeys) {
+    String sql = options(true, "ON") + attemptsQuery(table, partitionedByKeys);
+    try {
+      planQuery(sql);
+      Assert.fail("Expected the physical optimizer to reject UNNEST");
+    } catch (RuntimeException e) {
+      Assert.assertTrue(ExceptionUtils.getStackTrace(e).contains("Unexpected relNode type"),
+          "Unexpected error: " + ExceptionUtils.getStackTrace(e));
+    }
+  }
+
+  private static <T extends PlanNode> List<T> findNodes(PlanNode node, Class<T> type) {
+    List<T> nodes = new ArrayList<>();
+    if (type.isInstance(node)) {
+      nodes.add(type.cast(node));
+    }
+    for (PlanNode input : node.getInputs()) {
+      nodes.addAll(findNodes(input, type));
+    }
+    return nodes;
   }
 
   // --------------------------------------------------------------------------
