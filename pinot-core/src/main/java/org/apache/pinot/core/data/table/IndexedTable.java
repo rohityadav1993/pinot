@@ -317,6 +317,7 @@ public abstract class IndexedTable extends BaseTable {
         case FUNNELMATCHSTEP:
         case FUNNELMAXSTEP:
         case FUNNELMAXSTEPWITHENTRY:
+        case FUNNELATTEMPTSANYORDER:
           return true;
         default:
           break;
