@@ -21,6 +21,9 @@ package org.apache.pinot.query.queries;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
+import org.apache.commons.lang3.exception.ExceptionUtils;
+import org.apache.pinot.calcite.rel.hint.PinotHintOptions;
 import org.apache.pinot.common.config.provider.TableCache;
 import org.apache.pinot.core.routing.MockRoutingManagerFactory;
 import org.apache.pinot.core.routing.RoutingManager;
@@ -31,7 +34,9 @@ import org.apache.pinot.query.planner.physical.DispatchablePlanFragment;
 import org.apache.pinot.query.planner.physical.DispatchableSubPlan;
 import org.apache.pinot.query.planner.plannode.AggregateNode;
 import org.apache.pinot.query.planner.plannode.FilterNode;
+import org.apache.pinot.query.planner.plannode.MailboxReceiveNode;
 import org.apache.pinot.query.planner.plannode.PlanNode;
+import org.apache.pinot.query.planner.plannode.TableScanNode;
 import org.apache.pinot.query.planner.plannode.UnnestNode;
 import org.apache.pinot.query.routing.WorkerManager;
 import org.apache.pinot.spi.utils.CommonConstants;
@@ -326,7 +331,7 @@ public class UnnestSqlPlannerTest extends QueryEnvironmentTestBase {
   @Test(dataProvider = "partitionedByKeys")
   public void testUnnestOverAggregateResult(boolean partitionedByKeys) {
     String sql = "SELECT f.col1, u.v FROM (SELECT "
-        + (partitionedByKeys ? "/*+ aggOptions(is_partitioned_by_group_by_keys='true') */ " : "")
+        + (partitionedByKeys ? PARTITIONED_BY_KEYS_HINT : "")
         + "col1, ARRAY_AGG(col3, 'INT') AS r FROM b GROUP BY col1) f CROSS JOIN UNNEST(f.r) AS u(v) WHERE u.v > 1";
     DispatchableSubPlan subPlan = _queryEnvironment.planQuery(sql);
     List<UnnestNode> unnestNodes = findUnnestNodes(subPlan);
@@ -335,6 +340,149 @@ public class UnnestSqlPlannerTest extends QueryEnvironmentTestBase {
     Assert.assertEquals(unnestNode.getArrayExprs(), List.of(new RexExpression.InputRef(1)));
     Assert.assertEquals(unnestNode.getElementIndexes(), List.of(2));
     Assert.assertFalse(hasFilterBelowUnnest(subPlan), "The filter on the element should not be pushed below UNNEST");
+  }
+
+  // --------------------------------------------------------------------------
+  // UNNEST over an aggregate result (ADR 0014 plan shapes (a) and (b))
+  // --------------------------------------------------------------------------
+
+  private static final String PARTITIONED_BY_KEYS_HINT = "/*+ aggOptions(is_partitioned_by_group_by_keys='true') */ ";
+
+  /// An array-returning aggregate in a subquery, unnested by the outer query, with an outer filter on the element.
+  private static String unnestOverAggregateQuery(boolean partitionedByKeys) {
+    return "SELECT f.col1, u.v FROM (SELECT " + (partitionedByKeys ? PARTITIONED_BY_KEYS_HINT : "")
+        + "col1, FUNNEL_MAX_STEP_WITH_ENTRY(ts, 100, 2, col2 = 'x', col2 = 'y') AS r FROM b GROUP BY col1) f "
+        + "CROSS JOIN UNNEST(f.r) AS u(v) WHERE u.v >= 2";
+  }
+
+  /// Plan shape (b): the hint survives the decorrelation of the subquery, so the aggregate is DIRECT in the leaf
+  /// stage, and `UNNEST` and the outer filter run above it in the same stage, with no exchange in between.
+  @Test
+  public void testUnnestOverPartitionedAggregateStaysInLeafStage() {
+    DispatchableSubPlan subPlan = _queryEnvironment.planQuery(unnestOverAggregateQuery(true));
+    List<AggregateNode> aggregates = findNodes(subPlan, AggregateNode.class);
+    Assert.assertEquals(aggregates.size(), 1, "Expected one DIRECT aggregate, got: " + aggregates);
+    AggregateNode aggregate = aggregates.get(0);
+    Assert.assertEquals(aggregate.getAggType(), AggregateNode.AggType.DIRECT);
+    Assert.assertEquals(aggregate.getNodeHint().getHintOptions().get(PinotHintOptions.AGGREGATE_HINT_OPTIONS),
+        Map.of(PinotHintOptions.AggregateOptions.IS_PARTITIONED_BY_GROUP_BY_KEYS, "true"),
+        "The aggregate hint should survive the decorrelation of the subquery");
+
+    PlanNode fragmentRoot = fragmentRootOf(subPlan, aggregate);
+    Assert.assertFalse(findNodes(fragmentRoot, TableScanNode.class).isEmpty(),
+        "The DIRECT aggregate should be in the leaf stage");
+    List<PlanNode> path = pathTo(fragmentRoot, aggregate);
+    int unnestIndex = indexOfType(path, UnnestNode.class);
+    Assert.assertTrue(unnestIndex >= 0, "UNNEST should be above the aggregate in the leaf stage, got path: " + path);
+    Assert.assertTrue(indexOfType(path, FilterNode.class) < unnestIndex,
+        "The outer filter should be above UNNEST, got path: " + path);
+    Assert.assertEquals(findNodes(subPlan, UnnestNode.class).size(), 1);
+    Assert.assertTrue(findNodes(fragmentRoot, MailboxReceiveNode.class).isEmpty(),
+        "The leaf stage should have no exchange, so none between the aggregate and UNNEST");
+    Assert.assertFalse(hasFilterBelowUnnest(subPlan), "The outer filter should not be pushed below UNNEST");
+  }
+
+  /// Plan shape (a): without the hint the aggregate is split into LEAF, exchange, FINAL, and `UNNEST` runs above
+  /// FINAL in the intermediate stage.
+  @Test
+  public void testUnnestOverAggregateWithoutHintRunsAboveFinalAggregate() {
+    DispatchableSubPlan subPlan = _queryEnvironment.planQuery(unnestOverAggregateQuery(false));
+    List<AggregateNode> aggregates = findNodes(subPlan, AggregateNode.class);
+    Assert.assertEquals(aggregates.size(), 2, "Expected LEAF and FINAL aggregates, got: " + aggregates);
+    AggregateNode leaf = null;
+    AggregateNode fin = null;
+    for (AggregateNode aggregate : aggregates) {
+      if (aggregate.getAggType() == AggregateNode.AggType.LEAF) {
+        leaf = aggregate;
+      } else if (aggregate.getAggType() == AggregateNode.AggType.FINAL) {
+        fin = aggregate;
+      }
+    }
+    Assert.assertNotNull(leaf, "Expected a LEAF aggregate, got: " + aggregates);
+    Assert.assertNotNull(fin, "Expected a FINAL aggregate, got: " + aggregates);
+    Assert.assertNotEquals(leaf.getStageId(), fin.getStageId(), "LEAF and FINAL should be in different stages");
+    Assert.assertFalse(findNodes(fragmentRootOf(subPlan, leaf), TableScanNode.class).isEmpty(),
+        "The LEAF aggregate should be in the leaf stage");
+
+    PlanNode finalRoot = fragmentRootOf(subPlan, fin);
+    Assert.assertTrue(findNodes(finalRoot, TableScanNode.class).isEmpty(), "FINAL should not be in the leaf stage");
+    List<PlanNode> path = pathTo(finalRoot, fin);
+    int unnestIndex = indexOfType(path, UnnestNode.class);
+    Assert.assertTrue(unnestIndex >= 0, "UNNEST should be above the FINAL aggregate, got path: " + path);
+    Assert.assertTrue(indexOfType(path, FilterNode.class) < unnestIndex,
+        "The outer filter should be above UNNEST, got path: " + path);
+    Assert.assertTrue(fin.getInputs().get(0) instanceof MailboxReceiveNode,
+        "FINAL should read the LEAF results from an exchange");
+    Assert.assertFalse(hasFilterBelowUnnest(subPlan), "The outer filter should not be pushed below UNNEST");
+  }
+
+  /// Pins current behaviour (ADR 0014 section 6): the physical optimizer cannot plan `UNNEST` (`RelToPRelConverter`
+  /// has no branch for `Correlate`/`Uncollect`). If this starts passing planning, revisit the attempts query docs.
+  @Test
+  public void testUnnestOverAggregateFailsWithPhysicalOptimizer() {
+    String sql = "SET usePhysicalOptimizer=true; " + unnestOverAggregateQuery(true);
+    try {
+      _queryEnvironment.planQuery(sql);
+      Assert.fail("Expected the physical optimizer to reject UNNEST");
+    } catch (RuntimeException e) {
+      Assert.assertTrue(ExceptionUtils.getStackTrace(e).contains("Unexpected relNode type"),
+          "Unexpected error: " + ExceptionUtils.getStackTrace(e));
+    }
+  }
+
+  private static <T extends PlanNode> List<T> findNodes(DispatchableSubPlan subPlan, Class<T> type) {
+    List<T> nodes = new ArrayList<>();
+    for (DispatchablePlanFragment fragment : subPlan.getQueryStages()) {
+      nodes.addAll(findNodes(fragment.getPlanFragment().getFragmentRoot(), type));
+    }
+    return nodes;
+  }
+
+  private static <T extends PlanNode> List<T> findNodes(PlanNode node, Class<T> type) {
+    List<T> nodes = new ArrayList<>();
+    if (type.isInstance(node)) {
+      nodes.add(type.cast(node));
+    }
+    for (PlanNode input : node.getInputs()) {
+      nodes.addAll(findNodes(input, type));
+    }
+    return nodes;
+  }
+
+  private static PlanNode fragmentRootOf(DispatchableSubPlan subPlan, PlanNode node) {
+    for (DispatchablePlanFragment fragment : subPlan.getQueryStages()) {
+      PlanNode root = fragment.getPlanFragment().getFragmentRoot();
+      if (!pathTo(root, node).isEmpty()) {
+        return root;
+      }
+    }
+    throw new AssertionError("Node not found in any stage: " + node);
+  }
+
+  /// Returns the nodes from `root` down to `target` (both included), or an empty list if `target` is not below `root`.
+  private static List<PlanNode> pathTo(PlanNode root, PlanNode target) {
+    if (root == target) {
+      List<PlanNode> path = new ArrayList<>();
+      path.add(root);
+      return path;
+    }
+    for (PlanNode input : root.getInputs()) {
+      List<PlanNode> path = pathTo(input, target);
+      if (!path.isEmpty()) {
+        path.add(0, root);
+        return path;
+      }
+    }
+    return List.of();
+  }
+
+  private static int indexOfType(List<PlanNode> path, Class<? extends PlanNode> type) {
+    for (int i = 0; i < path.size(); i++) {
+      if (type.isInstance(path.get(i))) {
+        return i;
+      }
+    }
+    return -1;
   }
 
   private static class AggregateFilterUnnestChain {
