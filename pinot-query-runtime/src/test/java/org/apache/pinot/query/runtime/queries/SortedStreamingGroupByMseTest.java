@@ -91,6 +91,8 @@ public class SortedStreamingGroupByMseTest extends QueryRunnerTestBase {
 
   /// Expected `[bucket, step1Users, step2Users, step3Users]`, by bucket, built from the scenario of each user.
   private final Map<Long, long[]> _expectedFunnel = new TreeMap<>();
+  /// Expected number of users in the scanned range by deepest step (1 to 3), built from the scenario of each user.
+  private final Map<Long, Long> _expectedUsersByDepth = new TreeMap<>();
 
   private static Schema schema(String name) {
     return new Schema.SchemaBuilder().setSchemaName(name)
@@ -195,6 +197,7 @@ public class SortedStreamingGroupByMseTest extends QueryRunnerTestBase {
         for (int step = 1; step <= depth; step++) {
           counts[step]++;
         }
+        _expectedUsersByDepth.merge((long) depth, 1L, Long::sum);
       }
     }
     return events;
@@ -304,6 +307,17 @@ public class SortedStreamingGroupByMseTest extends QueryRunnerTestBase {
         + "event_type = 'c', 'STRICT_ORDER') AS r FROM " + table + " WHERE ts BETWEEN 0 AND " + (RANGE_HI + WINDOW_MS)
         + " GROUP BY correlation_id)) "
         + "WHERE max_step >= 1 AND entry_ts BETWEEN 0 AND " + RANGE_HI + " GROUP BY 1 ORDER BY 1";
+  }
+
+  /// Unnests each user's `[maxStep, entryTs]` and counts users by deepest step. The outer filter keeps the step
+  /// elements of the users that reached at least step 1 (entry times are far above 3).
+  private static String unnestFunnelQuery(String table, boolean partitionedByKeys) {
+    return "SELECT u.v AS max_step, COUNT(*) AS users "
+        + "FROM (SELECT " + (partitionedByKeys ? GROUP_BY_HINT_B : "") + "correlation_id, "
+        + "FUNNEL_MAX_STEP_WITH_ENTRY(ts, " + WINDOW_MS + ", 3, event_type = 'a', event_type = 'b', "
+        + "event_type = 'c', 'STRICT_ORDER') AS r FROM " + table + " WHERE ts BETWEEN 0 AND " + (RANGE_HI + WINDOW_MS)
+        + " GROUP BY correlation_id) f "
+        + "CROSS JOIN UNNEST(f.r) AS u(v) WHERE u.v BETWEEN 1 AND 3 GROUP BY 1";
   }
 
   private static String genericQuery(String table, boolean partitionedByKeys) {
@@ -442,6 +456,38 @@ public class SortedStreamingGroupByMseTest extends QueryRunnerTestBase {
       Assert.assertNotEquals(actual, expected,
           "plan shape (b) is documented to be wrong when partitions are not exclusive to one server (mode " + mode
               + ")");
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // UNNEST over the funnel aggregate (ADR 0014 section 6)
+  // --------------------------------------------------------------------------
+
+  private List<List<Long>> expectedUsersByDepthRows() {
+    List<List<Long>> rows = new ArrayList<>();
+    _expectedUsersByDepth.forEach((depth, users) -> rows.add(Arrays.asList(depth, users)));
+    rows.sort(Comparator.comparing(Object::toString));
+    return rows;
+  }
+
+  /// `CROSS JOIN UNNEST` over the array an aggregate returns, with the streaming GROUP BY off and on: under (b) on
+  /// the exclusive layout, where the aggregate is leaf-final and `UNNEST` runs in the leaf stage, and under (a) on
+  /// both layouts, where `UNNEST` runs above the FINAL aggregate. Default planner only: the physical optimizer cannot
+  /// plan `UNNEST` (pinned in `UnnestSqlPlannerTest`).
+  @Test
+  public void testUnnestOverFunnelAggregate() {
+    List<List<Long>> expected = expectedUsersByDepthRows();
+    Assert.assertEquals(expected.size(), 3, "every depth should be present: " + expected);
+    Object[][] cases = {{EXCLUSIVE, true}, {EXCLUSIVE, false}, {SPREAD, false}};
+    for (Object[] c : cases) {
+      String table = (String) c[0];
+      boolean partitionedByKeys = (boolean) c[1];
+      for (String mode : List.of("OFF", "ON")) {
+        String sql = options(false, mode) + unnestFunnelQuery(table, partitionedByKeys);
+        Assert.assertEquals(longRows(run(sql).getResultTable()), expected,
+            table + ", hint " + partitionedByKeys + ", mode " + mode);
+      }
+      assertEngaged(options(false, "ON") + unnestFunnelQuery(table, partitionedByKeys));
     }
   }
 
