@@ -24,6 +24,7 @@ import java.io.File;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import org.apache.pinot.common.function.scalar.FunnelAttemptFunctions;
 import org.apache.pinot.integration.tests.window.utils.WindowFunnelUtils;
 import org.apache.pinot.spi.data.Schema;
 import org.testng.annotations.Test;
@@ -355,6 +356,47 @@ public class WindowFunnelTest extends CustomDataQueryClusterIntegrationTest {
       } else {
         assertTrue(row.get(1).get(1).longValue() > 0);
       }
+    }
+  }
+
+  /// Per user group, the expected attempts as {start, depth} pairs, worked out by hand from [WindowFunnelUtils]'s
+  /// events.
+  /// - Window 15, steps cart, start, confirmation: in group 0 the cart event at exactly 1010 + 15 opens a second
+  ///   attempt; in group 2 the cart event at 1015 is absorbed; in group 3 the start event before any cart is ignored.
+  /// - Window 25, steps cart, confirmation, start: group 0 sees start before confirmation and converts all three
+  ///   steps; groups 1 and 2 see start but no confirmation, so only step 1 converts.
+  @Test(dataProvider = "useBothQueryEngines")
+  public void testFunnelAttemptsAnyOrderGroupByQueries(boolean useMultiStageQueryEngine)
+      throws Exception {
+    setUseMultiStageQueryEngine(useMultiStageQueryEngine);
+    checkFunnelAttempts("15, 3, url = '/cart/add', url = '/checkout/start', url = '/checkout/confirmation'",
+        new long[][][]{{{1010, 2}, {1025, 1}}, {{2010, 2}}, {{1010, 2}}, {{12010, 1}}});
+    checkFunnelAttempts("25, 3, url = '/cart/add', url = '/checkout/confirmation', url = '/checkout/start'",
+        new long[][][]{{{1010, 3}}, {{2010, 1}}, {{1010, 1}}, {{12010, 1}}});
+  }
+
+  private void checkFunnelAttempts(String args, long[][][] expectedByGroup)
+      throws Exception {
+    String attempts = "FUNNEL_ATTEMPTS_ANY_ORDER(timestampCol, " + args + ")";
+    String query = String.format("SELECT userId, %s, funnelAttemptStart(arrayElementAtLong(%s, 1)), "
+            + "funnelAttemptDepth(arrayElementAtLong(%s, 1)) FROM %s GROUP BY userId ORDER BY userId LIMIT %d",
+        attempts, attempts, attempts, getTableName(), getCountStarResult());
+    JsonNode rows = postQuery(query).get("resultTable").get("rows");
+    assertEquals(rows.size(), 40, rows.toString());
+    for (int i = 0; i < 40; i++) {
+      JsonNode row = rows.get(i);
+      assertEquals(row.get(0).textValue(), "user" + (i / 10) + (i % 10));
+      long[][] expected = expectedByGroup[i / 10];
+      JsonNode actual = row.get(1);
+      assertEquals(actual.size(), expected.length, row.toString());
+      for (int a = 0; a < expected.length; a++) {
+        assertEquals(FunnelAttemptFunctions.funnelAttemptStart(actual.get(a).longValue()), expected[a][0],
+            row.toString());
+        assertEquals(FunnelAttemptFunctions.funnelAttemptDepth(actual.get(a).longValue()), expected[a][1],
+            row.toString());
+      }
+      assertEquals(row.get(2).longValue(), expected[0][0], row.toString());
+      assertEquals(row.get(3).longValue(), expected[0][1], row.toString());
     }
   }
 

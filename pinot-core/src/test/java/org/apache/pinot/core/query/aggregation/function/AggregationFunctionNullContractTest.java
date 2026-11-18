@@ -334,7 +334,7 @@ public class AggregationFunctionNullContractTest {
       AggregationFunctionType.SUMVALUESINTEGERSUMTUPLESKETCH, AggregationFunctionType.AVGVALUEINTEGERSUMTUPLESKETCH,
       AggregationFunctionType.STUNION, AggregationFunctionType.BOOLAND, AggregationFunctionType.BOOLOR,
       AggregationFunctionType.FUNNELMAXSTEP, AggregationFunctionType.FUNNELMAXSTEPWITHENTRY,
-      AggregationFunctionType.FUNNELCOMPLETECOUNT,
+      AggregationFunctionType.FUNNELATTEMPTSANYORDER, AggregationFunctionType.FUNNELCOMPLETECOUNT,
       AggregationFunctionType.FUNNELSTEPDURATIONSTATS, AggregationFunctionType.FUNNELMATCHSTEP,
       AggregationFunctionType.FUNNELEVENTSFUNCTIONEVAL, AggregationFunctionType.FUNNELCOUNT
   );

@@ -28,6 +28,7 @@ import org.apache.pinot.core.query.aggregation.function.array.ListAggFunction;
 import org.apache.pinot.core.query.aggregation.function.array.SumArrayDoubleAggregationFunction;
 import org.apache.pinot.core.query.aggregation.function.array.SumArrayLongAggregationFunction;
 import org.apache.pinot.core.query.aggregation.function.funnel.FunnelCountAggregationFunctionFactory;
+import org.apache.pinot.core.query.aggregation.function.funnel.window.FunnelAttemptsAnyOrderAggregationFunction;
 import org.apache.pinot.core.query.aggregation.function.funnel.window.FunnelCompleteCountAggregationFunction;
 import org.apache.pinot.core.query.aggregation.function.funnel.window.FunnelEventsFunctionEvalAggregationFunction;
 import org.apache.pinot.core.query.aggregation.function.funnel.window.FunnelMatchStepAggregationFunction;
@@ -374,6 +375,8 @@ public class AggregationFunctionFactory {
             return new FunnelMaxStepAggregationFunction(arguments, nullHandlingEnabled);
           case FUNNELMAXSTEPWITHENTRY:
             return new FunnelMaxStepWithEntryAggregationFunction(arguments, nullHandlingEnabled);
+          case FUNNELATTEMPTSANYORDER:
+            return new FunnelAttemptsAnyOrderAggregationFunction(arguments, nullHandlingEnabled);
           case FUNNELMATCHSTEP:
             return new FunnelMatchStepAggregationFunction(arguments, nullHandlingEnabled);
           case FUNNELCOMPLETECOUNT:

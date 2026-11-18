@@ -348,18 +348,24 @@ public class UnnestSqlPlannerTest extends QueryEnvironmentTestBase {
 
   private static final String PARTITIONED_BY_KEYS_HINT = "/*+ aggOptions(is_partitioned_by_group_by_keys='true') */ ";
 
+  /// The array-returning funnel aggregates the attempts query and the ordered funnel query unnest.
+  @DataProvider(name = "funnelArrayAggregates")
+  public Object[][] funnelArrayAggregates() {
+    return new Object[][]{{"FUNNEL_MAX_STEP_WITH_ENTRY"}, {"FUNNEL_ATTEMPTS_ANY_ORDER"}};
+  }
+
   /// An array-returning aggregate in a subquery, unnested by the outer query, with an outer filter on the element.
-  private static String unnestOverAggregateQuery(boolean partitionedByKeys) {
+  private static String unnestOverAggregateQuery(String function, boolean partitionedByKeys) {
     return "SELECT f.col1, u.v FROM (SELECT " + (partitionedByKeys ? PARTITIONED_BY_KEYS_HINT : "")
-        + "col1, FUNNEL_MAX_STEP_WITH_ENTRY(ts, 100, 2, col2 = 'x', col2 = 'y') AS r FROM b GROUP BY col1) f "
+        + "col1, " + function + "(ts, 100, 2, col2 = 'x', col2 = 'y') AS r FROM b GROUP BY col1) f "
         + "CROSS JOIN UNNEST(f.r) AS u(v) WHERE u.v >= 2";
   }
 
   /// Plan shape (b): the hint survives the decorrelation of the subquery, so the aggregate is DIRECT in the leaf
   /// stage, and `UNNEST` and the outer filter run above it in the same stage, with no exchange in between.
-  @Test
-  public void testUnnestOverPartitionedAggregateStaysInLeafStage() {
-    DispatchableSubPlan subPlan = _queryEnvironment.planQuery(unnestOverAggregateQuery(true));
+  @Test(dataProvider = "funnelArrayAggregates")
+  public void testUnnestOverPartitionedAggregateStaysInLeafStage(String function) {
+    DispatchableSubPlan subPlan = _queryEnvironment.planQuery(unnestOverAggregateQuery(function, true));
     List<AggregateNode> aggregates = findNodes(subPlan, AggregateNode.class);
     Assert.assertEquals(aggregates.size(), 1, "Expected one DIRECT aggregate, got: " + aggregates);
     AggregateNode aggregate = aggregates.get(0);
@@ -384,9 +390,9 @@ public class UnnestSqlPlannerTest extends QueryEnvironmentTestBase {
 
   /// Plan shape (a): without the hint the aggregate is split into LEAF, exchange, FINAL, and `UNNEST` runs above
   /// FINAL in the intermediate stage.
-  @Test
-  public void testUnnestOverAggregateWithoutHintRunsAboveFinalAggregate() {
-    DispatchableSubPlan subPlan = _queryEnvironment.planQuery(unnestOverAggregateQuery(false));
+  @Test(dataProvider = "funnelArrayAggregates")
+  public void testUnnestOverAggregateWithoutHintRunsAboveFinalAggregate(String function) {
+    DispatchableSubPlan subPlan = _queryEnvironment.planQuery(unnestOverAggregateQuery(function, false));
     List<AggregateNode> aggregates = findNodes(subPlan, AggregateNode.class);
     Assert.assertEquals(aggregates.size(), 2, "Expected LEAF and FINAL aggregates, got: " + aggregates);
     AggregateNode leaf = null;
@@ -420,7 +426,7 @@ public class UnnestSqlPlannerTest extends QueryEnvironmentTestBase {
   /// has no branch for `Correlate`/`Uncollect`). If this starts passing planning, revisit the attempts query docs.
   @Test
   public void testUnnestOverAggregateFailsWithPhysicalOptimizer() {
-    String sql = "SET usePhysicalOptimizer=true; " + unnestOverAggregateQuery(true);
+    String sql = "SET usePhysicalOptimizer=true; " + unnestOverAggregateQuery("FUNNEL_MAX_STEP_WITH_ENTRY", true);
     try {
       _queryEnvironment.planQuery(sql);
       Assert.fail("Expected the physical optimizer to reject UNNEST");
