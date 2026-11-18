@@ -1057,6 +1057,37 @@ public class CommonConstants {
         /// WHERE max_step >= 1 AND entry_ts BETWEEN lo AND hi GROUP BY 1
         /// ```
         ///
+        /// **Canonical attempts query.** `FUNNEL_ATTEMPTS_ANY_ORDER` counts funnel attempts, not users, with the same
+        /// streamed inner `GROUP BY`. An attempt opens at a step 1 (entry step) event and covers the half-open range
+        /// `[start, start + cw)`; a step 1 inside it is absorbed, a step 1 at or after `start + cw` opens the next
+        /// attempt, and steps 2..N count in any order, each converting only if all earlier steps were seen. A user can
+        /// have many attempts. `UNNEST` returns one packed value per attempt, read with `funnelAttemptStart` and
+        /// `funnelAttemptDepth` (the packing is opaque):
+        ///
+        /// ```sql
+        /// SELECT funnelAttemptStart(u.a) / bucket AS bucket,
+        ///        SUM(CASE WHEN funnelAttemptDepth(u.a) >= 1 THEN 1 ELSE 0 END) AS step1_attempts, ...
+        /// FROM (
+        ///   SELECT /*+ aggOptions(is_partitioned_by_group_by_keys='true') */ correlation_id,
+        ///          FUNNEL_ATTEMPTS_ANY_ORDER(ts, cw, 3, s1, s2, s3) AS attempts
+        ///   FROM events WHERE ts >= lo AND ts < hi + cw GROUP BY correlation_id) f
+        /// CROSS JOIN UNNEST(f.attempts) AS u(a)
+        /// WHERE funnelAttemptStart(u.a) >= lo AND funnelAttemptStart(u.a) < hi GROUP BY 1
+        /// ```
+        ///
+        /// Ranges are half-open: attempts starting in `[lo, hi)` are reported, so scan `[lo, hi + cw)`; an attempt
+        /// that starts just before `hi` needs events up to, not including, `hi + cw`, and attempts starting in
+        /// `[hi, hi + cw)` are scanned but dropped by the outer filter. **Results depend on the query start time:**
+        /// there is no lookback, so an attempt opens at the first step 1 in the scanned range, and a step 1 just
+        /// before `lo` that would have absorbed later ones is not seen. **Default planner only:** the physical
+        /// optimizer (`usePhysicalOptimizer=true`) cannot plan `UNNEST` and fails the query with `Unexpected relNode
+        /// type`. Without the hint the leaf ships each user's events to the final aggregate and `UNNEST` runs above it
+        /// (plan shape (a), see **Plan shapes** below); with it, `UNNEST` runs in the leaf stage and only the packed
+        /// attempts leave it. The inner level must keep the streaming shape (no `HAVING`, filtered aggregations, extra
+        /// key or trimming `ORDER BY`/`LIMIT`) or it falls back to the hash GROUP BY. Attempt counts are a different
+        /// metric from both `FUNNEL_COUNT` and the ordered funnel: they count attempts (a user with two attempts in a
+        /// bucket counts twice, each attempt counting in the bucket of its own start), not users.
+        ///
         /// **Plan shapes.** By default the leaf returns intermediate results and an exchange on the key follows
         /// (plan shape (a)); it is correct on any layout. With the hint `aggOptions(is_partitioned_by_group_by_keys=
         /// 'true')` the leaf is the final aggregate and no exchange follows (plan shape (b)). **Hazard:** (b) trusts
