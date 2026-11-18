@@ -57,6 +57,7 @@ import org.apache.calcite.rex.RexLiteral;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.rex.RexWindowExclusion;
 import org.apache.calcite.sql.type.SqlTypeName;
+import org.apache.calcite.util.ImmutableBitSet;
 import org.apache.pinot.calcite.rel.hint.PinotHintOptions;
 import org.apache.pinot.calcite.rel.logical.PinotLogicalAggregate;
 import org.apache.pinot.calcite.rel.logical.PinotLogicalExchange;
@@ -244,7 +245,8 @@ public final class RelToPlanNodeConverter {
       List<RelDataTypeField> projectFields = correlatedProject.getRowType().getFieldList();
       for (int i = 0; i < numProjects; i++) {
         RexNode rex = correlatedProject.getProjects().get(i);
-        RexExpression arrayExpr = deriveArrayExpression(rex, correlatedProject, leftRowType);
+        RexExpression arrayExpr =
+            deriveArrayExpression(rex, correlatedProject, leftRowType, node.getRequiredColumns());
         if (arrayExpr == null) {
           arrayExpr = RexExpressionUtils.fromRexNode(rex);
         }
@@ -320,8 +322,9 @@ public final class RelToPlanNodeConverter {
   }
 
   @Nullable
-  private RexExpression deriveArrayExpression(RexNode rex, Project project, RelDataType leftRowType) {
-    Integer idx = resolveInputRefFromCorrel(rex, leftRowType);
+  private RexExpression deriveArrayExpression(RexNode rex, Project project, RelDataType leftRowType,
+      ImmutableBitSet requiredColumns) {
+    Integer idx = resolveInputRefFromCorrel(rex, leftRowType, requiredColumns);
     if (idx != null) {
       return new RexExpression.InputRef(idx);
     }
@@ -535,7 +538,7 @@ public final class RelToPlanNodeConverter {
     }
   }
 
-  private Integer resolveInputRefFromCorrel(RexNode expr, RelDataType leftRowType) {
+  private Integer resolveInputRefFromCorrel(RexNode expr, RelDataType leftRowType, ImmutableBitSet requiredColumns) {
     if (expr instanceof RexFieldAccess) {
       RexFieldAccess fieldAccess = (RexFieldAccess) expr;
       if (fieldAccess.getReferenceExpr() instanceof RexCorrelVariable) {
@@ -562,6 +565,13 @@ public final class RelToPlanNodeConverter {
               return i;
             }
           }
+        }
+        // The left input may have lost the subquery alias, e.g. an optimized aggregate names its outputs `agg#0`.
+        // The correlation variable's row type is the left input's, so its field position still points at the column.
+        int index = fieldAccess.getField().getIndex();
+        if (index < fields.size() && requiredColumns.get(index)
+            && fields.get(index).getType().equals(fieldAccess.getField().getType())) {
+          return index;
         }
       }
     }

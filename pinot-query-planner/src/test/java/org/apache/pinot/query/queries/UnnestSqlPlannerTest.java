@@ -316,6 +316,27 @@ public class UnnestSqlPlannerTest extends QueryEnvironmentTestBase {
         "Ordinality filter should never be pushed below the UNNEST operator");
   }
 
+  @DataProvider(name = "partitionedByKeys")
+  public Object[][] partitionedByKeys() {
+    return new Object[][]{{false}, {true}};
+  }
+
+  /// The optimized aggregate under the correlate names its output `agg#0`, not the subquery alias `r`, so the
+  /// correlated reference `$cor0.r` cannot be resolved by name.
+  @Test(dataProvider = "partitionedByKeys")
+  public void testUnnestOverAggregateResult(boolean partitionedByKeys) {
+    String sql = "SELECT f.col1, u.v FROM (SELECT "
+        + (partitionedByKeys ? "/*+ aggOptions(is_partitioned_by_group_by_keys='true') */ " : "")
+        + "col1, ARRAY_AGG(col3, 'INT') AS r FROM b GROUP BY col1) f CROSS JOIN UNNEST(f.r) AS u(v) WHERE u.v > 1";
+    DispatchableSubPlan subPlan = _queryEnvironment.planQuery(sql);
+    List<UnnestNode> unnestNodes = findUnnestNodes(subPlan);
+    Assert.assertEquals(unnestNodes.size(), 1);
+    UnnestNode unnestNode = unnestNodes.get(0);
+    Assert.assertEquals(unnestNode.getArrayExprs(), List.of(new RexExpression.InputRef(1)));
+    Assert.assertEquals(unnestNode.getElementIndexes(), List.of(2));
+    Assert.assertFalse(hasFilterBelowUnnest(subPlan), "The filter on the element should not be pushed below UNNEST");
+  }
+
   private static class AggregateFilterUnnestChain {
     private final FilterNode _filterNode;
     private final UnnestNode _unnestNode;
