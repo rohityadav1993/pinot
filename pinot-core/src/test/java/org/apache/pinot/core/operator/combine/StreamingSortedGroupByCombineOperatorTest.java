@@ -23,6 +23,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
@@ -34,6 +35,7 @@ import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 import org.apache.commons.io.FileUtils;
 import org.apache.pinot.common.datatable.DataTable.MetadataKey;
+import org.apache.pinot.common.function.scalar.FunnelAttemptFunctions;
 import org.apache.pinot.common.partition.function.ModuloPartitionFunction;
 import org.apache.pinot.common.proto.Plan;
 import org.apache.pinot.common.utils.DataSchema;
@@ -50,6 +52,7 @@ import org.apache.pinot.core.plan.PlanNode;
 import org.apache.pinot.core.plan.maker.InstancePlanMakerImplV2;
 import org.apache.pinot.core.plan.maker.PlanMaker;
 import org.apache.pinot.core.query.aggregation.function.AggregationFunction;
+import org.apache.pinot.core.query.aggregation.function.funnel.FunnelSessionsOracle;
 import org.apache.pinot.core.query.request.context.QueryContext;
 import org.apache.pinot.core.query.request.context.SortedGroupByDecision;
 import org.apache.pinot.core.query.request.context.utils.QueryContextConverterUtils;
@@ -107,6 +110,9 @@ public class StreamingSortedGroupByCombineOperatorTest {
 
   private static final int NUM_PARTITIONS = 4;
   private static final int NUM_FUNNEL_USERS = 60;
+  private static final int NUM_ATTEMPT_USERS = 55;
+  /// Conversion window of the attempt fixture, in the units of `val`
+  private static final long ATTEMPT_WINDOW = 50;
   private static final String AGGS = "COUNT(*), SUM(val), MIN(val), MAX(val)";
   /// A LIMIT at or above numGroupsLimit cannot trim at the leaf; the default LIMIT 10 would (see the gate).
   private static final String BIG_LIMIT = " LIMIT 1000000";
@@ -143,6 +149,11 @@ public class StreamingSortedGroupByCombineOperatorTest {
   /// Three sorted segments of funnel events (key = user, other = step type, val = timestamp); every user's events
   /// are spread over all three, so each group spans segments
   private List<IndexSegment> _funnelSegments;
+  /// Three sorted segments of funnel-attempt events, sliced by time (segment i holds timestamps in
+  /// `[100 i, 100 (i + 1))`), so a user's attempts span segments. `_attemptEvents` holds each user's
+  /// `{timestamp, step}` pairs (1-based steps 1-3, the noise step 4 left out) for the oracle.
+  private List<IndexSegment> _attemptSegments;
+  private final Map<Integer, List<long[]>> _attemptEvents = new HashMap<>();
 
   @BeforeClass
   public void setUp()
@@ -211,6 +222,52 @@ public class StreamingSortedGroupByCombineOperatorTest {
       // Rows are appended user by user, so each segment is sorted by key
       _funnelSegments.add(buildSegment(SORTED_TABLE_CONFIG, "funnel_" + i, funnelRows.get(i)));
     }
+    buildAttemptFixture();
+  }
+
+  /// Users with hand-built event lists (see [#ATTEMPT_WINDOW]), then seeded random users.
+  private void buildAttemptFixture()
+      throws Exception {
+    List<List<GenericRow>> rows = List.of(new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
+    // User 0: no entry step at all (only later steps and noise): no attempt
+    addAttemptEvents(rows, 0, new long[][]{{5, 2}, {8, 3}, {120, 4}, {250, 3}});
+    // User 1: one complete attempt inside one segment
+    addAttemptEvents(rows, 1, new long[][]{{10, 1}, {20, 2}, {30, 3}});
+    // User 2: four attempts over three segments; the entry step at exactly start + window opens the next attempt
+    addAttemptEvents(rows, 2, new long[][]{{10, 1}, {40, 2}, {60, 1}, {90, 2}, {130, 1}, {160, 3}, {250, 1}});
+    // User 3: absorbed entry steps (1@20 and 1@30 belong to the attempt started at 10), then a later attempt
+    addAttemptEvents(rows, 3, new long[][]{{10, 1}, {20, 1}, {30, 1}, {40, 2}, {110, 1}});
+    // User 4: steps before any entry step are ignored, then an attempt whose later steps fall outside its window
+    addAttemptEvents(rows, 4, new long[][]{{5, 2}, {8, 3}, {100, 1}, {120, 2}, {290, 3}});
+    // User 5: an attempt starting at 90 that converts steps in the next two segments (110, 130), then one at 190
+    addAttemptEvents(rows, 5, new long[][]{{90, 1}, {110, 2}, {130, 3}, {190, 1}});
+    Random random = new Random(77);
+    for (int user = 6; user < 6 + NUM_ATTEMPT_USERS; user++) {
+      int numEvents = 1 + random.nextInt(12);
+      long[][] events = new long[numEvents][];
+      for (int e = 0; e < numEvents; e++) {
+        events[e] = new long[]{random.nextInt(300), 1 + random.nextInt(4)};
+      }
+      addAttemptEvents(rows, user, events);
+    }
+    _attemptSegments = new ArrayList<>();
+    for (int i = 0; i < 3; i++) {
+      // Rows are appended user by user, so each segment is sorted by key
+      _attemptSegments.add(buildSegment(SORTED_TABLE_CONFIG, "attempts_" + i, rows.get(i)));
+    }
+  }
+
+  private void addAttemptEvents(List<List<GenericRow>> rows, int user, long[][] events) {
+    List<long[]> oracleEvents = new ArrayList<>();
+    for (long[] event : events) {
+      rows.get((int) (event[0] / 100)).add(row(user, (int) event[1], event[0]));
+      if (event[1] <= 3) {
+        oracleEvents.add(event);
+      }
+    }
+    // The funnel sorts by timestamp and then step
+    oracleEvents.sort((a, b) -> a[0] != b[0] ? Long.compare(a[0], b[0]) : Long.compare(a[1], b[1]));
+    _attemptEvents.put(user, oracleEvents);
   }
 
   @AfterClass
@@ -236,6 +293,9 @@ public class StreamingSortedGroupByCombineOperatorTest {
     }
     _nullBearingUnsortedSegment.destroy();
     for (IndexSegment segment : _funnelSegments) {
+      segment.destroy();
+    }
+    for (IndexSegment segment : _attemptSegments) {
       segment.destroy();
     }
     FileUtils.deleteDirectory(TEMP_DIR);
@@ -994,9 +1054,13 @@ public class StreamingSortedGroupByCombineOperatorTest {
 
   /// OFF, ON and AUTO give the same rows for `query` over the funnel segments. Returns the ON result.
   private Result assertFunnelParity(String query, int blockSize) {
-    Result off = run(_funnelSegments, query, blockSize);
-    Result on = run(_funnelSegments, "SET sortedGroupByMode='ON'; " + query, blockSize);
-    Result auto = run(_funnelSegments, "SET sortedGroupByMode='AUTO'; " + query, blockSize);
+    return assertFunnelParity(_funnelSegments, NUM_FUNNEL_USERS, query, blockSize);
+  }
+
+  private static Result assertFunnelParity(List<IndexSegment> segments, int numKeys, String query, int blockSize) {
+    Result off = run(segments, query, blockSize);
+    Result on = run(segments, "SET sortedGroupByMode='ON'; " + query, blockSize);
+    Result auto = run(segments, "SET sortedGroupByMode='AUTO'; " + query, blockSize);
     assertFalse(off._combine instanceof StreamingSortedGroupByCombineOperator);
     assertEngaged(on);
     assertEngaged(auto);
@@ -1005,7 +1069,7 @@ public class StreamingSortedGroupByCombineOperatorTest {
     assertEquals(on._schema, off._schema, "ON and OFF schemas differ for: " + query);
     assertEquals(auto._schema, off._schema, "AUTO and OFF schemas differ for: " + query);
     assertEveryKeyOnce(on._rows);
-    assertEquals(on._rows.size(), NUM_FUNNEL_USERS);
+    assertEquals(on._rows.size(), numKeys);
     return on;
   }
 
@@ -1051,6 +1115,57 @@ public class StreamingSortedGroupByCombineOperatorTest {
         + "MAX(val) FROM testTable GROUP BY key" + BIG_LIMIT;
     assertFunnelParity(query, 3);
     assertFunnelParity("SET serverReturnFinalResult=true; " + query, 0);
+  }
+
+  /// `FUNNEL_ATTEMPTS_ANY_ORDER` over time-sliced segments: OFF, ON and AUTO agree on the intermediate results (small
+  /// blocks, so groups cross blocks) and on the final results, and every key's final result is the packed output of
+  /// the reference algorithm run on that key's events. Parity alone would pass if both paths were wrong alike.
+  @Test
+  public void testFunnelAttemptsAnyOrderMatchesOffAndTheOracleAcrossTimeSlicedSegments() {
+    int numKeys = 6 + NUM_ATTEMPT_USERS;
+    for (long window : new long[]{ATTEMPT_WINDOW, 20, 1000}) {
+      String query = "SELECT key, FUNNEL_ATTEMPTS_ANY_ORDER(val, " + window + ", 3, other = 1, other = 2, other = 3), "
+          + "COUNT(*) FROM testTable GROUP BY key" + BIG_LIMIT;
+      for (int blockSize : new int[]{4, 3}) {
+        assertFunnelParity(_attemptSegments, numKeys, query, blockSize);
+      }
+      Result on = assertFunnelParity(_attemptSegments, numKeys, "SET serverReturnFinalResult=true; " + query, 0);
+      assertEngaged(on);
+      for (Object[] row : on._rows) {
+        int key = (Integer) row[0];
+        long[] expected = expectedAttempts(window, key);
+        assertEquals((long[]) row[1], expected,
+            "Key " + key + " (window " + window + ") differs from the oracle: " + render(row[1]));
+      }
+      if (window == ATTEMPT_WINDOW) {
+        assertAttemptFixtureIsNotVacuous(on);
+      }
+    }
+  }
+
+  private long[] expectedAttempts(long window, int key) {
+    return FunnelSessionsOracle.funnelSessions(window, 3, _attemptEvents.get(key)).stream()
+        .mapToLong(session -> FunnelAttemptFunctions.pack(session._start, session.depth())).toArray();
+  }
+
+  /// Hand-worked results for the designed users, and enough variety that the oracle check means something.
+  private static void assertAttemptFixtureIsNotVacuous(Result finalResult) {
+    Map<Integer, long[]> byKey = new HashMap<>();
+    for (Object[] row : finalResult._rows) {
+      byKey.put((Integer) row[0], (long[]) row[1]);
+    }
+    assertEquals(byKey.get(0).length, 0, "a key with no entry step has no attempt");
+    assertEquals(byKey.get(1), new long[]{FunnelAttemptFunctions.pack(10, 3)});
+    assertEquals(byKey.get(2), new long[]{FunnelAttemptFunctions.pack(10, 2), FunnelAttemptFunctions.pack(60, 2),
+        FunnelAttemptFunctions.pack(130, 1), FunnelAttemptFunctions.pack(250, 1)});
+    assertEquals(byKey.get(3), new long[]{FunnelAttemptFunctions.pack(10, 2), FunnelAttemptFunctions.pack(110, 1)});
+    assertEquals(byKey.get(4), new long[]{FunnelAttemptFunctions.pack(100, 2)});
+    assertEquals(byKey.get(5), new long[]{FunnelAttemptFunctions.pack(90, 3), FunnelAttemptFunctions.pack(190, 1)});
+    assertTrue(byKey.values().stream().map(Arrays::toString).distinct().count() >= 10,
+        "Expected many distinct attempt lists");
+    assertTrue(byKey.values().stream().anyMatch(attempts -> attempts.length >= 3), "Expected a key with 3+ attempts");
+    assertTrue(byKey.values().stream().filter(attempts -> attempts.length == 0).count() >= 2,
+        "Expected several keys without an attempt");
   }
 
   // ---------------------------------------------------------------------------------------------------------------
